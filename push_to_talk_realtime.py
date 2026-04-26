@@ -9,7 +9,7 @@ Notes
 -----
 - Captures 16 kHz mono PCM from the default input device (set DEVICE_INDEX if needed).
 - Uses Ctrl+V on Windows/Linux and Cmd+V on macOS to paste the final text.
-- The dictation trigger is configurable and can be set to the Linux touchpad middle click.
+- The dictation trigger is configurable from the tray menu.
 - Requires OPENAI_API_KEY with speech-to-text access in the environment or a .env file.
 """
 
@@ -23,7 +23,9 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -170,6 +172,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 STARTER_SCRIPT_PATH = SCRIPT_DIR / "start_push_to_talk.py"
 WORK_LOG_PATH = Path(os.getenv("WORK_LOG_PATH") or (SCRIPT_DIR / "work_log.txt"))
 SETTINGS_PATH = Path(os.getenv("PUSH_TO_TALK_SETTINGS_PATH") or (SCRIPT_DIR / "settings.json"))
+LOG_PATH = Path(os.getenv("PUSH_TO_TALK_LOG_PATH") or (SCRIPT_DIR / "push_to_talk_realtime.log"))
 HOTKEY_CAPTURE_HELPER_PATH = SCRIPT_DIR / "hotkey_capture_helper.py"
 SYSTEMD_SERVICE_NAME = os.getenv("PUSH_TO_TALK_SERVICE_NAME", "push-to-talk-realtime.service")
 SYSTEMD_MANAGED_ENV = "PUSH_TO_TALK_MANAGED_BY_SYSTEMD"
@@ -268,6 +271,7 @@ TRAY_COLOR_TRANSCRIBING = (255, 166, 0, 255)
 TRAY_SPINNER_STEPS = 12
 TRAY_SPINNER_SWEEP_DEG = 90
 TRAY_SPINNER_INTERVAL_S = 0.1
+APPINDICATOR_BACKEND = pystray.Icon.__module__ == "pystray._appindicator"
 
 
 class TrayIconLike(Protocol):
@@ -361,6 +365,8 @@ input_listener_watchdog_thread: threading.Thread | None = None
 input_listener_watchdog_stop = threading.Event()
 tray_icon: TrayIconLike | None = None
 tray_animation_thread: threading.Thread | None = None
+tray_icon_key: tuple[tuple[int, int, int, int], int | None] | None = None
+tray_status_signature: tuple[str, str, str, str, bool, bool] | None = None
 DEVICE_LIST: list[tuple[int, str]] = []
 HOTKEY_MODIFIER_ORDER = ("CTRL", "ALT", "SHIFT", "SUPER", "ALT_GR")
 HOTKEY_DISPLAY_NAMES = {
@@ -423,18 +429,95 @@ openai_client: Any = None
 transcription_warmup_started = threading.Event()
 transcription_warmup_finished = threading.Event()
 output_keyboard_lock = threading.Lock()
+log_write_lock = threading.Lock()
+tray_ui_lock = threading.RLock()
+log_file_failure_reported = False
 
 # -------------------- Utilities --------------------
 
 
 def log(*a):
+    global log_file_failure_reported
     message = " ".join(str(part) for part in a)
-    try:
-        print(message, flush=True)
-    except UnicodeEncodeError:
-        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-        safe_message = message.encode(encoding, errors="replace").decode(encoding, errors="replace")
-        print(safe_message, flush=True)
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    thread_name = threading.current_thread().name
+    line = f"{timestamp} [{thread_name}] {message}"
+    with log_write_lock:
+        try:
+            print(line, flush=True)
+        except UnicodeEncodeError:
+            encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+            safe_message = line.encode(encoding, errors="replace").decode(
+                encoding, errors="replace"
+            )
+            print(safe_message, flush=True)
+        try:
+            LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with LOG_PATH.open("a", encoding="utf-8") as handle:
+                handle.write(f"{line}\n")
+        except Exception as exc:  # pylint: disable=broad-except
+            if not log_file_failure_reported:
+                log_file_failure_reported = True
+                sys.stderr.write(f"[Logging] Unable to write log file {LOG_PATH}: {exc}\n")
+                sys.stderr.flush()
+
+
+def log_unhandled_exception(
+    exc_type: type[BaseException], exc_value: BaseException, exc_traceback
+) -> None:
+    stack = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback)).rstrip()
+    log("[Crash] Unhandled exception:", stack)
+
+
+def log_unhandled_thread_exception(args: threading.ExceptHookArgs) -> None:
+    stack = "".join(
+        traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)
+    ).rstrip()
+    thread_name = getattr(args.thread, "name", "unknown")
+    log(f"[Crash] Unhandled exception in thread {thread_name}:", stack)
+
+
+def install_runtime_hooks() -> None:
+    sys.excepthook = log_unhandled_exception
+    threading.excepthook = log_unhandled_thread_exception
+
+
+def current_tray_status_signature() -> tuple[str, str, str, str, bool, bool]:
+    with state.lock:
+        status = "Ready"
+        if state.is_transcribing:
+            status = "Transcribing"
+        elif state.is_listening:
+            status = "Listening"
+        mode = "Dictation" if state.mode == MODE_DICTATION else "Worklog"
+        device_label = state.active_device_label
+        transcription_engine = transcription_engine_label(state.transcription_engine)
+        muted_warning = state.muted_warning
+    return (
+        status,
+        mode,
+        device_label,
+        transcription_engine,
+        muted_warning,
+        keyboard_listener_is_running(),
+    )
+
+
+def log_tray_status_change(reason: str = "state change") -> None:
+    global tray_status_signature
+    signature = current_tray_status_signature()
+    if signature == tray_status_signature:
+        return
+    tray_status_signature = signature
+    status, mode, device_label, transcription_engine, muted_warning, hotkey_ready = signature
+    details = [mode, transcription_engine]
+    if device_label:
+        details.append(device_label)
+    if muted_warning:
+        details.append("Muted?")
+    details.append("hotkey-ok" if hotkey_ready else "hotkey-down")
+    backend_mode = "static" if APPINDICATOR_BACKEND else "dynamic"
+    log(f"[Tray] {reason}: {status} ({', '.join(details)}; backend={backend_mode})")
 
 
 def canonicalize_hotkey_token(token: str) -> str:
@@ -823,7 +906,7 @@ def mark_transcription_started() -> None:
     with state.lock:
         state.transcribing_session_count += 1
         state.is_transcribing = state.transcribing_session_count > 0
-    update_tray_status()
+    update_tray_status("transcription started")
 
 
 def mark_transcription_finished(final_text: str = "") -> None:
@@ -832,7 +915,7 @@ def mark_transcription_finished(final_text: str = "") -> None:
             state.transcript_final = final_text
         state.transcribing_session_count = max(0, state.transcribing_session_count - 1)
         state.is_transcribing = state.transcribing_session_count > 0
-    update_tray_status()
+    update_tray_status("transcription finished")
 
 
 def wait_for_output_turn(session_id: int) -> None:
@@ -862,14 +945,25 @@ def append_dictation_history_entry(text: str) -> None:
 # -------------------- Audio device helpers --------------------
 
 
+def keyboard_listener_is_running() -> bool:
+    listener = keyboard_listener
+    if listener is None:
+        return False
+    try:
+        return bool(listener.running) and listener.is_alive()
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
 def start_keyboard_listener() -> None:
     global keyboard_listener
     with keyboard_listener_lock:
+        if keyboard_listener_is_running():
+            return
         if keyboard_listener is not None:
-            is_alive = getattr(keyboard_listener, "is_alive", None)
-            if not callable(is_alive) or is_alive():
-                return
             log("[Input] Keyboard listener stopped unexpectedly; restarting.")
+            with suppress(Exception):
+                keyboard_listener.stop()
             keyboard_listener = None
         keyboard_listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
         keyboard_listener.start()
@@ -1782,7 +1876,7 @@ def start_listening(
         state.active_hotkey_kind = hotkey_kind
         state.active_hotkey_tokens = hotkey_tokens
         state.active_device_label = label_text
-    update_tray_status()
+    update_tray_status("session started")
 
     with state.lock:
         toggle_mode = state.toggle_mode_enabled
@@ -1872,14 +1966,14 @@ def start_listening(
                 state.active_device_label = ""
                 state.should_stop = False
                 state.muted_warning = False
-        update_tray_status()
+        update_tray_status("session aborted")
         return
 
     label_text = active_label or DEFAULT_DEVICE_LABEL
     with state.lock:
         if state.active_session_id == session_id:
             state.active_device_label = label_text
-    update_tray_status()
+    update_tray_status("session ready")
     if realtime_worker is not None and not realtime_worker.is_alive():
         realtime_worker.start()
     log(f"\n[Listening-{label}] {action} {hotkey_name}... (device: {label_text})")
@@ -1902,11 +1996,11 @@ def start_listening(
                     with state.lock:
                         state.muted_warning = True
                     log("[Audio] You may be muted or too quiet.")
-                    update_tray_status()
+                    update_tray_status("mute warning")
                 elif idle_s < MUTE_WARNING_AFTER_S and muted_warning:
                     with state.lock:
                         state.muted_warning = False
-                    update_tray_status()
+                    update_tray_status("audio resumed")
     finally:
         recorder.stop()
         maybe_beep(BEEP_STOP_PATTERN)
@@ -1921,7 +2015,7 @@ def start_listening(
             state.active_device_label = ""
             state.should_stop = False
             state.muted_warning = False
-    update_tray_status()
+    update_tray_status("session ended")
 
     with buffer_lock:
         chunks = [chunk.copy() for chunk in record_buffer]
@@ -2268,7 +2362,19 @@ def open_work_log(_icon=None, _item=None) -> None:
 
 
 def update_tray_icon() -> None:
+    global tray_icon_key
     if tray_icon is None:
+        return
+    if APPINDICATOR_BACKEND:
+        with state.lock:
+            is_listening = state.is_listening
+            is_transcribing = state.is_transcribing
+        if is_listening:
+            tray_icon_key = (TRAY_COLOR_LISTENING, None)
+        elif is_transcribing:
+            tray_icon_key = (TRAY_COLOR_TRANSCRIBING, None)
+        else:
+            tray_icon_key = (TRAY_COLOR_READY, None)
         return
     with state.lock:
         is_listening = state.is_listening
@@ -2281,14 +2387,22 @@ def update_tray_icon() -> None:
     else:
         color = TRAY_COLOR_READY
     spinner = spinner_step if is_transcribing and not is_listening else None
+    if APPINDICATOR_BACKEND:
+        spinner = None
+    icon_key = (color, spinner)
+    if icon_key == tray_icon_key:
+        return
     try:
         tray_icon.icon = create_tray_icon_image(color=color, spinner_step=spinner)
+        tray_icon_key = icon_key
     except Exception as exc:  # pylint: disable=broad-except
         log("[Tray] Icon update failed:", exc)
 
 
 def update_tray_tooltip() -> None:
     if tray_icon is None:
+        return
+    if APPINDICATOR_BACKEND:
         return
     with state.lock:
         tooltip_enabled = state.tooltip_enabled
@@ -2328,23 +2442,36 @@ def update_tray_tooltip() -> None:
         tray_icon.title = f"{TRAY_TITLE} - {status}"
 
 
-def update_tray_status() -> None:
-    update_tray_tooltip()
-    update_tray_icon()
+def update_tray_status(reason: str = "state change") -> None:
+    log_tray_status_change(reason)
+    if tray_icon is None:
+        return
+    with tray_ui_lock:
+        update_tray_tooltip()
+        update_tray_icon()
 
 
 def refresh_tray_menu() -> None:
     if tray_icon is None:
         return
-    update_tray_status()
+    update_tray_status("menu refresh")
     if hasattr(tray_icon, "update_menu"):
-        tray_icon.update_menu()
+        with tray_ui_lock:
+            try:
+                tray_icon.update_menu()
+            except Exception as exc:  # pylint: disable=broad-except
+                log("[Tray] Menu refresh failed:", exc)
 
 
 def rebuild_tray_menu() -> None:
     if tray_icon is None:
         return
-    tray_icon.menu = build_menu()
+    with tray_ui_lock:
+        try:
+            tray_icon.menu = build_menu()
+        except Exception as exc:  # pylint: disable=broad-except
+            log("[Tray] Menu rebuild failed:", exc)
+            return
     refresh_tray_menu()
 
 
@@ -2882,6 +3009,15 @@ def create_tray_icon_image(
 
 def tray_animation_loop() -> None:
     while not shutdown_event.is_set():
+        if not keyboard_listener_is_running():
+            try:
+                start_keyboard_listener()
+                log("[Hotkey] Keyboard listener restarted.")
+            except Exception as exc:  # pylint: disable=broad-except
+                log("[Hotkey] Unable to restart keyboard listener:", exc)
+        if APPINDICATOR_BACKEND:
+            time.sleep(0.25)
+            continue
         with state.lock:
             is_listening = state.is_listening
             is_transcribing = state.is_transcribing
@@ -2911,7 +3047,10 @@ def start_tray_animation_loop() -> None:
 
 
 def tray_setup(_icon: TrayIconLike) -> None:
+    global tray_icon_key, tray_status_signature
     _icon.visible = True  # required when using a custom setup callback
+    tray_icon_key = None
+    tray_status_signature = None
     enforce_transcription_engine_dependencies()
     start_transcription_warmup()
     start_tray_animation_loop()
@@ -2926,12 +3065,19 @@ def tray_setup(_icon: TrayIconLike) -> None:
     )
     if selected_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
         log("[Transcription engine] Strict server-side realtime mode enabled (no local fallback).")
+    log(
+        f"[Tray] Backend {pystray.Icon.__module__}; runtime updates:"
+        f" {'disabled' if APPINDICATOR_BACKEND else 'enabled'}; log file: {LOG_PATH}"
+    )
     refresh_tray_menu()
 
 
 def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
+    global tray_icon_key, tray_status_signature
     shutdown_event.set()
     stop_input_listeners()
+    tray_icon_key = None
+    tray_status_signature = None
     if icon is None:
         return
     icon.visible = False
@@ -2940,6 +3086,7 @@ def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
 
 def main() -> None:
     global tray_icon
+    install_runtime_hooks()
     instance_guard = acquire_app_instance_guard()
     if instance_guard is None:
         log("[Startup] Another push-to-talk instance is already running; exiting.")

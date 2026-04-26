@@ -21,7 +21,7 @@ Features
 - Realtime live dictation: GPT-4o Realtime streams server-side transcript deltas while you are still holding the hotkey.
 - Transcription preferences are saved and restored on next launch.
 - Tray controls: `Settings`, `Open transcript history`, `Restart service`, and `Quit`.
-- Busy tray feedback: tray icon shows a spinner while transcription is in progress.
+- Busy tray feedback: non-AppIndicator backends update the tray icon live; Ubuntu AppIndicator stays on a static icon for stability and writes status changes to the app log.
 - Single-instance guard: accidental duplicate launches exit before installing a second global hotkey listener.
 - Startup hardening: the ready message is logged only after the global hotkey listener starts, and a watchdog restarts the listener if it stops unexpectedly.
 - First-press reliability: if the dictation key is released while the audio session is still starting, the release is remembered and applied as soon as recording becomes active.
@@ -97,6 +97,12 @@ Run:
 python .\start_push_to_talk.py
 ```
 
+By default, `start_push_to_talk.py` starts the already-installed user service
+on Linux when available; otherwise it detaches a background tray process and
+returns immediately so you do not have to keep a terminal open.
+
+For debugging, run the same script with `--foreground`.
+
 Run on startup
 --------------
 The easiest path is the tray menu: open `Settings` -> `Run at login`.
@@ -118,6 +124,16 @@ systemctl --user enable --now push-to-talk-realtime.service
 
 The Linux service reads `~/.config/push-to-talk-realtime.env` for variables such
 as `OPENAI_API_KEY`.
+
+Logging
+-------
+The app writes timestamped runtime logs to `push_to_talk_realtime.log` in the
+repo folder by default. Override that location with `PUSH_TO_TALK_LOG_PATH` if
+you want the log somewhere else.
+
+On Ubuntu/AppIndicator, the tray backend now favors stability over live icon
+animation. Status changes still show up in the log file, which makes it easier
+to diagnose hotkey/listener/tray issues when the desktop shell is flaky.
 
 Development
 -----------
@@ -205,7 +221,7 @@ Notes and tips
 - `work_log.txt` is a plain text history file. Dictations are tagged as `[Dictation]` and manual work-log captures are tagged as `[Work log]`.
 - Punctuation options affect both dictation and work log text content.
 - Paste suffix options affect dictation paste only.
-- Tray icon color: green when idle, red while listening, and orange + spinner while transcribing.
+- Tray icon color: green when idle, red while listening, and orange while transcribing. Non-AppIndicator backends also animate a spinner during transcription.
 - While an earlier transcript is still processing, you can start a new recording; completed dictations are pasted in the order the recordings started.
 - Realtime live typing applies only to dictation mode and may need app focus to stay in the target field.
 - GPT-4o Realtime is hard-switched to server-side mode (no local chunking and no Whisper fallback inside realtime mode).

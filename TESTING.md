@@ -136,13 +136,14 @@ CI now runs:
 1) Startup
 - Run: `python .\push_to_talk_realtime.py`
 - Expected: a tray icon appears and the console prints the ready message after the hotkey listener is active.
+- Expected: `push_to_talk_realtime.log` is created in the repo root.
 
 2) Dictation hotkey (F13 by default)
 - Hold the mouse button remapped to F13, speak one sentence, release.
 - Expected: beep on start/stop (if enabled), a transcript appears, and the text
   pastes into the active app.
-- While transcription is processing after key release, the tray icon shows a spinning
-  indicator until transcription completes.
+- While transcription is processing after key release, non-AppIndicator backends update the tray icon.
+- On Ubuntu/AppIndicator, the tray icon stays static for stability and the status change is written to `push_to_talk_realtime.log`.
 - Immediately after launch, do one short hold/release. Expected: the release is honored even if the audio session is still starting.
 
 3) Set Hotkey dialog
@@ -235,6 +236,7 @@ CI now runs:
 20) Tray restart and quit actions
 - If running under the included user systemd service on Linux, click `Restart service` and `Quit` from the tray.
 - Expected: `Restart service` restarts the service cleanly and the tray returns.
+- Expected: the dictation hotkey still works after the restart without needing a second manual relaunch.
 - Expected: `Quit` stops the service.
 - If running the script directly instead of under systemd, `Restart service` should relaunch `push_to_talk_realtime.py` and `Quit` should only close the current process.
 - Start the app twice manually.
@@ -242,7 +244,9 @@ CI now runs:
 
 21) Starter script
 - Run `python start_push_to_talk.py`.
-- Expected: the tray app starts exactly like running the main module directly.
+- Expected on Linux with the user service installed: the command returns quickly and the service becomes active.
+- Expected otherwise: the command returns quickly and a detached tray process keeps running after the terminal closes.
+- For debugging, run `python start_push_to_talk.py --foreground`.
 
 22) Mouse-side-button remap
 - Map a spare mouse button to `F13`, relaunch the app, then hold that button and speak.
@@ -253,3 +257,8 @@ CI now runs:
 - Left-click or right-click the tray icon.
 - Expected: the tray menu opens and actions such as `Settings`, `Restart service`, and `Quit` are clickable.
 - Expected: there are no preset entries such as `Default (no frills)` or `Bells and whistles`; individual toggles remain under `Settings` -> `Advanced`.
+
+25) Runtime logging
+- Use dictation once, then inspect `push_to_talk_realtime.log`.
+- Expected: each line has a timestamp and thread name.
+- Expected: tray state changes, startup details, and any unhandled thread exception are written there.

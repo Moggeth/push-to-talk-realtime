@@ -47,12 +47,16 @@ class FakeThread:
 def reset_app_state(monkeypatch, tmp_path: Path):
     app.state = app.SessionState()
     app.tray_icon = None
+    app.tray_icon_key = None
+    app.tray_status_signature = None
     app.keyboard_listener = None
     app.input_listener_watchdog_thread = None
     app.input_listener_watchdog_stop.set()
     app.DEVICE_LIST = []
+    app.log_file_failure_reported = False
     app.shutdown_event.clear()
     monkeypatch.setattr(app, "WORK_LOG_PATH", tmp_path / "work_log.txt")
+    monkeypatch.setattr(app, "LOG_PATH", tmp_path / "push_to_talk_realtime.log")
     FakeThread.created.clear()
 
 
@@ -468,14 +472,20 @@ def test_start_and_stop_keyboard_listener_manage_single_listener(monkeypatch):
             self.on_release = on_release
             self.started = 0
             self.stopped = 0
+            self.running = False
 
         def start(self):
             self.started += 1
+            self.running = True
             events.append("start")
 
         def stop(self):
             self.stopped += 1
+            self.running = False
             events.append("stop")
+
+        def is_alive(self):
+            return self.running
 
     monkeypatch.setattr(app.pynput_keyboard, "Listener", FakeListener)
 
@@ -502,12 +512,18 @@ def test_start_keyboard_listener_replaces_dead_listener(monkeypatch):
         def __init__(self, on_press, on_release):
             self.on_press = on_press
             self.on_release = on_release
-
-        def is_alive(self):
-            return True
+            self.running = False
 
         def start(self):
+            self.running = True
             events.append("start")
+
+        def stop(self):
+            self.running = False
+            events.append("stop")
+
+        def is_alive(self):
+            return self.running
 
     app.keyboard_listener = DeadListener()
     monkeypatch.setattr(app.pynput_keyboard, "Listener", FakeListener)
@@ -686,6 +702,7 @@ def test_update_tray_tooltip_resets_title_when_disabled():
 def test_update_tray_icon_uses_listening_color(monkeypatch):
     app.tray_icon = FakeTrayIcon()
     colors = []
+    monkeypatch.setattr(app, "APPINDICATOR_BACKEND", False)
     monkeypatch.setattr(
         app,
         "create_tray_icon_image",
@@ -700,24 +717,104 @@ def test_update_tray_icon_uses_listening_color(monkeypatch):
     assert app.tray_icon.icon == "icon"
 
 
+def test_update_tray_icon_skips_spinner_on_appindicator(monkeypatch):
+    app.tray_icon = FakeTrayIcon()
+    monkeypatch.setattr(app, "APPINDICATOR_BACKEND", True)
+    with app.state.lock:
+        app.state.is_transcribing = True
+        app.state.tray_spinner_step = 4
+
+    app.update_tray_icon()
+
+    assert app.tray_icon.icon is None
+    assert app.tray_icon_key == (app.TRAY_COLOR_TRANSCRIBING, None)
+
+
+def test_update_tray_icon_skips_redundant_redraw(monkeypatch):
+    app.tray_icon = FakeTrayIcon()
+    renders = []
+    monkeypatch.setattr(app, "APPINDICATOR_BACKEND", False)
+    monkeypatch.setattr(
+        app,
+        "create_tray_icon_image",
+        lambda **kwargs: renders.append((kwargs["color"], kwargs["spinner_step"])) or "icon",
+    )
+
+    app.update_tray_icon()
+    app.update_tray_icon()
+
+    assert renders == [(app.TRAY_COLOR_READY, None)]
+
+
 def test_update_tray_status_refreshes_tooltip_and_icon(monkeypatch):
+    app.tray_icon = FakeTrayIcon()
     calls = []
+    monkeypatch.setattr(app, "APPINDICATOR_BACKEND", False)
+    monkeypatch.setattr(
+        app, "log_tray_status_change", lambda reason="state change": calls.append(reason)
+    )
     monkeypatch.setattr(app, "update_tray_tooltip", lambda: calls.append("tooltip"))
     monkeypatch.setattr(app, "update_tray_icon", lambda: calls.append("icon"))
 
     app.update_tray_status()
 
-    assert calls == ["tooltip", "icon"]
+    assert calls == ["state change", "tooltip", "icon"]
+
+
+def test_update_tray_status_skips_runtime_ui_on_appindicator(monkeypatch):
+    app.tray_icon = FakeTrayIcon()
+    monkeypatch.setattr(app, "APPINDICATOR_BACKEND", True)
+    monkeypatch.setattr(
+        app,
+        "create_tray_icon_image",
+        lambda **kwargs: pytest.fail("AppIndicator runtime icon redraw should stay disabled"),
+    )
+    app.tray_icon.title = "before"
+    with app.state.lock:
+        app.state.is_transcribing = True
+
+    app.update_tray_status()
+
+    assert app.tray_icon.title == "before"
+    assert app.tray_icon.icon is None
+    assert app.tray_icon_key == (app.TRAY_COLOR_TRANSCRIBING, None)
+
+
+def test_log_writes_timestamped_message_to_file(tmp_path: Path, monkeypatch):
+    log_path = tmp_path / "push_to_talk_realtime.log"
+    monkeypatch.setattr(app, "LOG_PATH", log_path)
+
+    app.log("hello", "world")
+
+    contents = log_path.read_text(encoding="utf-8")
+    assert "hello world" in contents
+    assert "[" in contents
+
+
+def test_tray_animation_loop_restarts_dead_keyboard_listener(monkeypatch):
+    calls = []
+    states = iter([False, True])
+    monkeypatch.setattr(app, "keyboard_listener_is_running", lambda: next(states))
+    monkeypatch.setattr(app, "start_keyboard_listener", lambda: calls.append("start"))
+    monkeypatch.setattr(app, "log", lambda *args: calls.append(" ".join(map(str, args))))
+    monkeypatch.setattr(app, "update_tray_icon", lambda: calls.append("icon"))
+    monkeypatch.setattr(app.time, "sleep", lambda _seconds: app.shutdown_event.set())
+
+    app.tray_animation_loop()
+
+    assert calls == ["start", "[Hotkey] Keyboard listener restarted."]
 
 
 def test_refresh_tray_menu_updates_menu_when_icon_present(monkeypatch):
     app.tray_icon = FakeTrayIcon()
     calls = []
-    monkeypatch.setattr(app, "update_tray_status", lambda: calls.append("status"))
+    monkeypatch.setattr(
+        app, "update_tray_status", lambda reason="state change": calls.append(reason)
+    )
 
     app.refresh_tray_menu()
 
-    assert calls == ["status"]
+    assert calls == ["menu refresh"]
     assert app.tray_icon.updated == 1
 
 
@@ -1113,10 +1210,14 @@ def test_tray_setup_marks_icon_visible_and_starts_listener(monkeypatch):
     logs = []
     refresh_calls = []
     start_calls = []
+    animation_calls = []
     icon = FakeTrayIcon()
     monkeypatch.setattr(app, "log", lambda *args: logs.append(" ".join(map(str, args))))
     monkeypatch.setattr(app, "refresh_tray_menu", lambda: refresh_calls.append("refresh"))
     monkeypatch.setattr(app, "start_input_listeners", lambda: start_calls.append("start"))
+    monkeypatch.setattr(
+        app, "start_tray_animation_loop", lambda: animation_calls.append("animation")
+    )
     monkeypatch.setattr(app, "enforce_transcription_engine_dependencies", lambda: None)
     monkeypatch.setattr(app, "start_transcription_warmup", lambda: None)
 
@@ -1125,11 +1226,16 @@ def test_tray_setup_marks_icon_visible_and_starts_listener(monkeypatch):
     assert icon.visible is True
     assert refresh_calls == ["refresh"]
     assert start_calls == ["start"]
+    assert animation_calls == ["animation"]
     assert logs == [
         (
             f"Push-to-talk ready. {app.HOTKEY_DICTATION} for dictation/paste, "
             f"{app.HOTKEY_WORKLOG} for work log. Engine: GPT-4o Transcribe."
-        )
+        ),
+        (
+            f"[Tray] Backend {app.pystray.Icon.__module__}; runtime updates:"
+            f" {'disabled' if app.APPINDICATOR_BACKEND else 'enabled'}; log file: {app.LOG_PATH}"
+        ),
     ]
 
 
