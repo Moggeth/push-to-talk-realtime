@@ -78,11 +78,26 @@ except Exception:  # pylint: disable=broad-except
 load_dotenv()  # loads OPENAI_API_KEY from .env if present
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-WHISPER_MODEL = os.getenv("OPENAI_WHISPER_MODEL", "whisper-1")
 DEFAULT_TRANSCRIPTION_PROMPT = (
     "Transcribe exactly what is spoken. Use full sentence punctuation, including periods."
 )
-WHISPER_PROMPT = os.getenv("OPENAI_WHISPER_PROMPT", DEFAULT_TRANSCRIPTION_PROMPT).strip()
+RECORDED_TRANSCRIBE_MODEL_OPTIONS = (
+    "gpt-4o-transcribe",
+    "gpt-4o-mini-transcribe",
+    "whisper-1",
+)
+RECORDED_TRANSCRIBE_MODEL_LABELS = {
+    "gpt-4o-transcribe": "GPT-4o Transcribe",
+    "gpt-4o-mini-transcribe": "GPT-4o Mini Transcribe",
+    "whisper-1": "Whisper",
+}
+DEFAULT_RECORDED_TRANSCRIBE_MODEL = (
+    os.getenv("OPENAI_TRANSCRIBE_MODEL") or os.getenv("OPENAI_WHISPER_MODEL") or "gpt-4o-transcribe"
+).strip()
+RECORDED_TRANSCRIBE_PROMPT = os.getenv(
+    "OPENAI_TRANSCRIBE_PROMPT",
+    os.getenv("OPENAI_WHISPER_PROMPT", DEFAULT_TRANSCRIPTION_PROMPT),
+).strip()
 REALTIME_TRANSCRIBE_MODEL = os.getenv(
     "OPENAI_REALTIME_TRANSCRIBE_MODEL", "gpt-4o-transcribe"
 ).strip()
@@ -177,6 +192,28 @@ def normalize_transcription_engine(engine: str) -> str:
     return TRANSCRIPTION_ENGINE_WHISPER
 
 
+def normalize_recorded_transcription_model(model: str) -> str:
+    normalized = (model or "").strip().lower()
+    aliases = {
+        "gpt4o": "gpt-4o-transcribe",
+        "gpt-4o": "gpt-4o-transcribe",
+        "4o": "gpt-4o-transcribe",
+        "mini": "gpt-4o-mini-transcribe",
+        "gpt4o-mini": "gpt-4o-mini-transcribe",
+        "gpt-4o-mini": "gpt-4o-mini-transcribe",
+        "whisper": "whisper-1",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized in RECORDED_TRANSCRIBE_MODEL_OPTIONS:
+        return normalized
+    return "gpt-4o-transcribe"
+
+
+def recorded_transcription_model_label(model: str) -> str:
+    normalized = normalize_recorded_transcription_model(model)
+    return RECORDED_TRANSCRIBE_MODEL_LABELS.get(normalized, normalized)
+
+
 def realtime_transcribe_model_candidates() -> list[str]:
     candidates: list[str] = []
     override = REALTIME_SESSION_MODEL.strip()
@@ -191,11 +228,11 @@ def realtime_transcribe_model_candidates() -> list[str]:
     return candidates
 
 
-def transcription_engine_label(engine: str) -> str:
+def transcription_engine_label(engine: str, recorded_model: str | None = None) -> str:
     normalized = normalize_transcription_engine(engine)
     if normalized == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
         return "GPT-4o Realtime"
-    return "Whisper"
+    return recorded_transcription_model_label(recorded_model or DEFAULT_RECORDED_TRANSCRIBE_MODEL)
 
 
 SPECIAL_HOTKEY_NAME_ALIASES = {
@@ -281,6 +318,9 @@ class SessionState:
     punctuation_normalize_spaces: bool = False
     dictation_history_enabled: bool = DEFAULT_DICTATION_HISTORY_ENABLED
     transcription_engine: str = normalize_transcription_engine(DEFAULT_TRANSCRIPTION_ENGINE)
+    recorded_transcription_model: str = normalize_recorded_transcription_model(
+        DEFAULT_RECORDED_TRANSCRIBE_MODEL
+    )
     worklog_press_time: float = 0.0
     last_worklog_tap_time: float = 0.0
     worklog_double_tap_active: bool = False
@@ -436,6 +476,7 @@ def save_settings_to_disk() -> None:
     with state.lock:
         payload = {
             "transcription_engine": state.transcription_engine,
+            "transcription_model": state.recorded_transcription_model,
             "dictation_hotkey_kind": state.dictation_hotkey_kind,
             "dictation_hotkey_tokens": list(state.dictation_hotkey_tokens),
             "dictation_history_enabled": state.dictation_history_enabled,
@@ -456,6 +497,9 @@ def apply_persisted_settings() -> None:
 
     settings = load_settings_from_disk()
     engine = normalize_transcription_engine(str(settings.get("transcription_engine", "")))
+    recorded_model = normalize_recorded_transcription_model(
+        str(settings.get("transcription_model") or DEFAULT_RECORDED_TRANSCRIBE_MODEL)
+    )
     dictation_tokens = (HOTKEY_DICTATION,)
     worklog_hotkey = HOTKEY_WORKLOG
     dictation_history_enabled = DEFAULT_DICTATION_HISTORY_ENABLED
@@ -483,12 +527,16 @@ def apply_persisted_settings() -> None:
         )
     with state.lock:
         state.transcription_engine = engine
+        state.recorded_transcription_model = recorded_model
         state.dictation_hotkey_kind = HOTKEY_KIND_KEYBOARD
         state.dictation_hotkey_tokens = dictation_tokens
         state.dictation_hotkey_label = format_hotkey_tokens(dictation_tokens)
         state.dictation_history_enabled = dictation_history_enabled
     HOTKEY_WORKLOG = worklog_hotkey
-    log(f"[Settings] Loaded transcription engine: {transcription_engine_label(engine)}")
+    log(
+        f"[Settings] Loaded transcription engine: "
+        f"{transcription_engine_label(engine, recorded_model)}"
+    )
     log(
         "[Settings] Loaded hotkeys:"
         f" dictation={dictation_hotkey_summary()}, worklog={HOTKEY_WORKLOG}"
@@ -1078,11 +1126,11 @@ def start_recorder_with_fallback(
     return True, fallback_index, fallback_text
 
 
-# -------------------- Whisper transcription --------------------
+# -------------------- Recorded transcription --------------------
 
 
-def transcribe_with_whisper(chunks: list) -> str:
-    """Send recorded buffer to Whisper; return the transcript or ''."""
+def transcribe_with_whisper(chunks: list, model_name: str | None = None) -> str:
+    """Send recorded buffer to the selected transcription model; return transcript or ''."""
     if not chunks:
         return ""
     try:
@@ -1099,21 +1147,25 @@ def transcribe_with_whisper(chunks: list) -> str:
             wf.writeframes(pcm.tobytes())
         wav_bytes.seek(0)
         wav_bytes.name = "recording.wav"  # hint format to the API
+        if model_name is None:
+            with state.lock:
+                model_name = state.recorded_transcription_model
+        model_name = normalize_recorded_transcription_model(model_name)
 
         request_args: dict[str, Any] = {
-            "model": WHISPER_MODEL,
+            "model": model_name,
             "file": wav_bytes,
             "response_format": "json",
         }
-        if WHISPER_PROMPT:
-            request_args["prompt"] = WHISPER_PROMPT
+        if RECORDED_TRANSCRIBE_PROMPT:
+            request_args["prompt"] = RECORDED_TRANSCRIBE_PROMPT
 
         response = client.audio.transcriptions.create(
             **request_args,
         )
         return getattr(response, "text", "") or ""
     except Exception as exc:  # pylint: disable=broad-except
-        log("[Whisper error]", exc)
+        log("[Recorded transcription error]", exc)
         return ""
 
 
@@ -1533,11 +1585,11 @@ def transcribe_with_gpt4o_realtime_stream(
     return text
 
 
-def transcribe_audio(chunks: list, engine: str) -> str:
+def transcribe_audio(chunks: list, engine: str, recorded_model: str | None = None) -> str:
     normalized = normalize_transcription_engine(engine)
     if normalized == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
         return transcribe_with_gpt4o_realtime(chunks)
-    return transcribe_with_whisper(chunks)
+    return transcribe_with_whisper(chunks, recorded_model)
 
 
 # -------------------- Orchestration --------------------
@@ -1612,6 +1664,7 @@ def start_listening(
     with state.lock:
         toggle_mode = state.toggle_mode_enabled
         transcription_engine = state.transcription_engine
+        recorded_transcription_model = state.recorded_transcription_model
     label = "Dictate" if mode == MODE_DICTATION else "Log"
     action = "Tap" if toggle_mode else "Hold"
     use_realtime_streaming = transcription_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME
@@ -1751,7 +1804,11 @@ def start_listening(
         chunks = [chunk.copy() for chunk in record_buffer]
 
     mark_transcription_started()
-    log(f"\n[Transcribing] {transcription_engine_label(transcription_engine)} request sent...")
+    log(
+        "\n[Transcribing] "
+        f"{transcription_engine_label(transcription_engine, recorded_transcription_model)} "
+        "request sent..."
+    )
 
     audio_duration_s = sum(len(chunk) for chunk in chunks) / SAMPLE_RATE if chunks else 0.0
     transcribe_start = time.perf_counter()
@@ -1786,7 +1843,11 @@ def start_listening(
                     )
                     transcription_engine_used = TRANSCRIPTION_ENGINE_GPT4O_REALTIME
         else:
-            transcript_text = transcribe_audio(chunks, transcription_engine)
+            transcript_text = transcribe_audio(
+                chunks,
+                transcription_engine,
+                recorded_transcription_model,
+            )
             if (
                 transcription_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME and transcript_text
             ) or transcription_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
@@ -1817,7 +1878,10 @@ def start_listening(
             log(f"[Session {session_id}] Transcription failed; skipping output.")
             return
 
-        used_label = transcription_engine_label(transcription_engine_used)
+        used_label = transcription_engine_label(
+            transcription_engine_used,
+            recorded_transcription_model,
+        )
         log(
             f"[Metrics] {used_label} {transcription_ms:.0f} ms | "
             f"WPM {wpm:.1f} (words={word_count}, audio={audio_duration_s * 1000:.0f} ms)"
@@ -2105,6 +2169,7 @@ def update_tray_tooltip() -> None:
         device_label = state.active_device_label
         muted_warning = state.muted_warning
         transcription_engine = state.transcription_engine
+        recorded_transcription_model = state.recorded_transcription_model
 
     if not tooltip_enabled:
         tray_icon.title = TRAY_TITLE
@@ -2121,7 +2186,9 @@ def update_tray_tooltip() -> None:
         details.append("Dictation" if mode == MODE_DICTATION else "Worklog")
         if device_label:
             details.append(device_label)
-        details.append(transcription_engine_label(transcription_engine))
+        details.append(
+            transcription_engine_label(transcription_engine, recorded_transcription_model)
+        )
     if muted_warning:
         details.append("Muted?")
 
@@ -2184,9 +2251,20 @@ def set_transcription_engine(engine: str) -> None:
     with state.lock:
         state.transcription_engine = normalized
     save_settings_to_disk()
-    log(f"[Transcription engine] {transcription_engine_label(normalized)}")
+    with state.lock:
+        recorded_model = state.recorded_transcription_model
+    log(f"[Transcription engine] {transcription_engine_label(normalized, recorded_model)}")
     if normalized == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
         log("[Transcription engine] Strict server-side realtime mode enabled (no local fallback).")
+    refresh_tray_menu()
+
+
+def set_recorded_transcription_model(model: str) -> None:
+    normalized = normalize_recorded_transcription_model(model)
+    with state.lock:
+        state.recorded_transcription_model = normalized
+    save_settings_to_disk()
+    log(f"[Transcription model] {recorded_transcription_model_label(normalized)}")
     refresh_tray_menu()
 
 
@@ -2321,6 +2399,24 @@ def toggle_run_on_startup(_icon=None, _item=None) -> None:
     refresh_tray_menu()
 
 
+def apply_default_preset(_icon=None, _item=None) -> None:
+    with state.lock:
+        state.beeps_enabled = False
+        state.tooltip_enabled = False
+        state.toggle_mode_enabled = False
+        state.monitor_enabled = False
+        state.paste_suffix_mode = DEFAULT_SUFFIX_MODE
+        state.punctuation_terminal = True
+        state.punctuation_capitalize = False
+        state.punctuation_normalize_spaces = False
+        state.transcription_engine = TRANSCRIPTION_ENGINE_WHISPER
+        state.recorded_transcription_model = normalize_recorded_transcription_model(
+            DEFAULT_RECORDED_TRANSCRIBE_MODEL
+        )
+    save_settings_to_disk()
+    refresh_tray_menu()
+
+
 def parse_hotkey_capture_output(output: str) -> dict[str, Any]:
     for line in reversed(output.splitlines()):
         line = line.strip()
@@ -2435,7 +2531,7 @@ def build_input_device_menu() -> pystray.Menu:
 def build_transcription_menu() -> pystray.Menu:
     return pystray.Menu(
         pystray.MenuItem(
-            "Whisper",
+            "Record then paste",
             lambda _icon, _item: set_transcription_engine(TRANSCRIPTION_ENGINE_WHISPER),
             radio=True,
             checked=lambda _item: state.transcription_engine == TRANSCRIPTION_ENGINE_WHISPER,
@@ -2446,6 +2542,34 @@ def build_transcription_menu() -> pystray.Menu:
             radio=True,
             checked=lambda _item: state.transcription_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME,
         ),
+    )
+
+
+def make_recorded_model_action(model_name: str):
+    def action(_icon, _item):
+        set_recorded_transcription_model(model_name)
+
+    return action
+
+
+def make_recorded_model_checked(model_name: str):
+    def checked(_item):
+        return state.recorded_transcription_model == model_name
+
+    return checked
+
+
+def build_recorded_transcription_model_menu() -> pystray.Menu:
+    return pystray.Menu(
+        *[
+            pystray.MenuItem(
+                recorded_transcription_model_label(model_name),
+                make_recorded_model_action(model_name),
+                radio=True,
+                checked=make_recorded_model_checked(model_name),
+            )
+            for model_name in RECORDED_TRANSCRIBE_MODEL_OPTIONS
+        ]
     )
 
 
@@ -2528,7 +2652,8 @@ def build_menu() -> pystray.Menu:
         pystray.MenuItem(f"Work log hotkey: {HOTKEY_WORKLOG}", None, enabled=False),
         pystray.MenuItem("Set Hotkey...", prompt_for_hotkey),
         pystray.MenuItem("Options", build_options_menu()),
-        pystray.MenuItem("Transcription engine", build_transcription_menu()),
+        pystray.MenuItem("Transcription mode", build_transcription_menu()),
+        pystray.MenuItem("Recorded model", build_recorded_transcription_model_menu()),
         pystray.MenuItem("Punctuation", build_punctuation_menu()),
         pystray.MenuItem("Input device", build_input_device_menu()),
         pystray.MenuItem("Refresh audio devices", refresh_audio_devices),
@@ -2624,7 +2749,8 @@ def tray_setup(_icon: TrayIconLike) -> None:
     start_transcription_warmup()
     with state.lock:
         selected_engine = state.transcription_engine
-        engine_label = transcription_engine_label(selected_engine)
+        selected_model = state.recorded_transcription_model
+        engine_label = transcription_engine_label(selected_engine, selected_model)
     log(
         f"Push-to-talk ready. {HOTKEY_DICTATION} for dictation/paste, "
         f"{HOTKEY_WORKLOG} for work log. Engine: {engine_label}."

@@ -148,7 +148,7 @@ CI now runs:
 - Expected: the hotkey only starts dictation when the drafted keys are the only keys being held, except for `Shift + hotkey` system-audio capture.
 
 4) Realtime live typing (GPT-4o Realtime)
-- In tray menu, set "Transcription engine" -> "GPT-4o Realtime".
+- In tray menu, set "Transcription mode" -> "GPT-4o Realtime".
 - Hold Caps Lock and speak 1-2 sentences.
 - Expected: text starts appearing before key release; releasing Caps Lock finalizes punctuation/suffix.
 - Expected: realtime behavior is server-side; no local chunking fallback should appear in logs.
@@ -180,68 +180,70 @@ CI now runs:
   "Normalize whitespace" from the tray menu.
 - Expected: dictation + work log reflect the settings on the next run.
 
-11) Transcription engine toggle
-- In tray menu, switch "Transcription engine" between Whisper and GPT-4o Realtime.
+10) Transcription mode and recorded model toggles
+- In tray menu, switch "Transcription mode" between Record then paste and GPT-4o Realtime.
 - Expected: selected radio item updates immediately and next dictation uses that engine.
 - Expected: when GPT-4o Realtime is active, there is no automatic Whisper fallback.
+- In tray menu, switch "Recorded model" between GPT-4o Transcribe, GPT-4o Mini Transcribe, and Whisper.
+- Expected: next record-then-paste dictation uses the selected recorded model.
 
-12) Engine preference persistence
-- Set engine to GPT-4o Realtime, exit app, relaunch app.
-- Expected: tray still shows GPT-4o Realtime selected.
+11) Engine preference persistence
+- Set mode to GPT-4o Realtime and recorded model to Whisper, exit app, relaunch app.
+- Expected: tray still shows GPT-4o Realtime selected, and the recorded model selection is preserved.
 
-13) Dictation hotkey persistence
+12) Dictation hotkey persistence
 - Use `Set Hotkey...` to save a new dictation key or combo, exit the app, relaunch it.
 - Expected: the tray still shows the saved dictation hotkey and it works without reconfiguration.
 
-14) Transcript history (default on)
+13) Transcript history (default on)
 - Dictate once with the normal dictation hotkey, then open the history file from the tray.
 - Expected: a new line is appended with a full date/time stamp and a `[Dictation]` tag.
 - In `Options`, toggle `Save transcript history` off, dictate again, and confirm no new dictation history line is added.
 
-15) Work log hotkey (F14 by default)
+14) Work log hotkey (F14 by default)
 - Hold F14 for at least ~0.25s, speak a short sentence, release.
 - Expected: a new timestamped line appears in `work_log.txt` with a `[Work log]` tag.
 
-16) Mute monitor (optional)
+15) Mute monitor (optional)
 - Enable "Mute monitor", then start recording while silent.
 - Expected: after ~1.5s, a "Muted?" hint appears in the console/tray tooltip.
 
-17) Device hot-swap fallback
+16) Device hot-swap fallback
 - While the app is running, unplug and replug the USB mic, then press Caps Lock.
 - Expected: no crash; the console logs a retry/fallback message and recording
   continues or exits cleanly if no input device is available.
 
-18) Work log double-tap
+17) Work log double-tap
 - Double-tap F14 while idle.
 - Expected: `work_log.txt` opens and no new recording starts.
 
-19) Overlap while transcribing
+18) Overlap while transcribing
 - Dictate once with Caps Lock, release, then press Caps Lock again before the first transcript finishes.
 - Expected: the second recording starts immediately.
 - Expected: both transcripts still appear, and they paste in the order the recordings were made.
 
-20) Run on startup toggle
+19) Run on startup toggle
 - Open `Options` -> `Run on startup`.
 - Expected on Linux: a user systemd service is written/enabled for the current checkout and starts immediately.
 - Expected on Windows/macOS: the platform startup artifact is created for the current checkout.
 - Toggle it off again.
 - Expected: the startup artifact is disabled or removed cleanly.
 
-21) Tray restart and quit actions
+20) Tray restart and quit actions
 - If running under the included user systemd service on Linux, click `Restart` and `Quit` from the tray.
 - Expected: `Restart` restarts the service cleanly and the tray returns.
 - Expected: `Quit` stops the service.
 - If running the script directly instead of under systemd, `Restart` should relaunch the script and `Quit` should only close the current process.
 
-22) Starter script
+21) Starter script
 - Run `python start_push_to_talk.py`.
 - Expected: the tray app starts exactly like running the main module directly.
 
-23) Mouse-side-button remap
+22) Mouse-side-button remap
 - Map a spare mouse button to `F13`, relaunch the app, then hold that button and speak.
 - Expected: dictation starts/stops cleanly and other apps no longer react as if `F8` was pressed.
 
-24) Ubuntu tray interactivity
+23) Ubuntu tray interactivity
 - On Ubuntu GNOME/Wayland, launch the app from `python start_push_to_talk.py`.
 - Left-click or right-click the tray icon.
 - Expected: the tray menu opens and actions such as `Set Hotkey...`, `Restart`, and `Quit` are clickable.

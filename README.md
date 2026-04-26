@@ -17,9 +17,10 @@ Features
 - Configurable dictation hotkey: set a single key or key combo from the tray menu.
 - Shift-modified dictation: hold `Shift` while pressing the dictation hotkey to capture system audio instead of the microphone.
 - Work log capture: record and append a timestamped entry to `work_log.txt`.
-- Transcription engine toggle: choose Whisper or GPT-4o Realtime from the tray menu.
+- Transcription mode toggle: choose record-then-paste or GPT-4o Realtime from the tray menu.
+- Recorded model selector: choose GPT-4o Transcribe, GPT-4o Mini Transcribe, or Whisper for the record-then-paste path.
 - Realtime live dictation: GPT-4o Realtime streams server-side transcript deltas while you are still holding the hotkey.
-- Engine preference persistence: selected transcription engine is saved and restored on next launch.
+- Transcription preferences are saved and restored on next launch.
 - Tray controls: `Set Hotkey...`, transcript-history toggle, `Run on startup`, `Restart`, and `Quit`.
 - Busy tray feedback: tray icon shows a spinner while transcription is in progress.
 - Tray menu controls:
@@ -49,9 +50,13 @@ Tray Menu
   - Beeps: playful two-tone sound on start/stop (Windows only).
   - Status tooltip: shows Ready/Listening/Transcribing + device + mute hint.
   - Mute monitor: warns if you start recording but the mic stays silent.
-- Transcription engine:
-  - Whisper: transcribes after key release.
+- Transcription mode:
+  - Record then paste: transcribes after key release and preserves the original clipboard/paste workflow.
   - GPT-4o Realtime: strict server-side websocket transcription with server VAD; streams deltas while recording, then finalizes on release.
+- Recorded model:
+  - GPT-4o Transcribe: default quality/latency trade-off for the record-then-paste path.
+  - GPT-4o Mini Transcribe: usually fastest recorded model.
+  - Whisper: legacy fallback for the original behavior.
 - Punctuation:
   - Suffix: None / Space / Newline (affects pasted dictation only).
   - Ensure terminal punctuation (adds "." if missing; enabled by default).
@@ -145,8 +150,9 @@ Configuration
 Environment variables:
 
 - `OPENAI_API_KEY` (required): OpenAI API key with speech-to-text access.
-- `OPENAI_WHISPER_MODEL` (optional): defaults to `whisper-1`.
-- `OPENAI_WHISPER_PROMPT` (optional): punctuation/style hint for Whisper.
+- `OPENAI_TRANSCRIBE_MODEL` (optional): recorded-transcription model, default `gpt-4o-transcribe`.
+- `OPENAI_TRANSCRIBE_PROMPT` (optional): punctuation/style hint for recorded transcription.
+- `OPENAI_WHISPER_MODEL` / `OPENAI_WHISPER_PROMPT` are still accepted as legacy aliases.
 - `TRANSCRIPTION_ENGINE` (optional): `whisper` (default) or `gpt4o_realtime`.
 - `OPENAI_REALTIME_TRANSCRIBE_MODEL` (optional): defaults to `gpt-4o-transcribe`.
 - `OPENAI_REALTIME_SESSION_MODEL` (optional): preferred realtime transcription model override (for example `gpt-4o-transcribe`).
@@ -205,5 +211,5 @@ Notes and tips
 - While an earlier transcript is still processing, you can start a new recording; completed dictations are pasted in the order the recordings started.
 - Realtime live typing applies only to dictation mode and may need app focus to stay in the target field.
 - GPT-4o Realtime is hard-switched to server-side mode (no local chunking and no Whisper fallback inside realtime mode).
-- If realtime dependencies are missing, GPT-4o Realtime selection logs an install hint and stays on Whisper.
+- If realtime dependencies are missing, GPT-4o Realtime selection logs an install hint and stays on record-then-paste mode.
 - VAD auto-stop and retry queues are not implemented yet.
