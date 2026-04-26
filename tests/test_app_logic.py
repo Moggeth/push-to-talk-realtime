@@ -1120,6 +1120,10 @@ def test_tray_exit_stops_listener_hides_icon_and_sets_shutdown(monkeypatch):
 def test_main_builds_icon_and_runs_tray(monkeypatch):
     calls = []
 
+    class FakeGuard:
+        def release(self):
+            calls.append(("release",))
+
     class FakeIcon:
         def __init__(self, name, icon, title, menu):
             calls.append(("init", name, icon, title, menu))
@@ -1129,6 +1133,7 @@ def test_main_builds_icon_and_runs_tray(monkeypatch):
             calls.append(("run", setup))
 
     monkeypatch.setattr(app, "refresh_device_list", lambda: calls.append(("refresh",)))
+    monkeypatch.setattr(app, "acquire_app_instance_guard", lambda: FakeGuard())
     monkeypatch.setattr(app, "create_tray_icon_image", lambda: "icon")
     monkeypatch.setattr(app, "build_menu", lambda: "menu")
     monkeypatch.setattr(app.pystray, "Icon", FakeIcon)
@@ -1141,12 +1146,28 @@ def test_main_builds_icon_and_runs_tray(monkeypatch):
         ("init", "push_to_talk_realtime", "icon", app.TRAY_TITLE, "menu"),
         ("run", app.tray_setup),
         ("stop",),
+        ("release",),
     ]
     assert app.shutdown_event.is_set() is True
 
 
+def test_main_exits_when_another_instance_is_running(monkeypatch):
+    calls = []
+    monkeypatch.setattr(app, "acquire_app_instance_guard", lambda: None)
+    monkeypatch.setattr(app, "refresh_device_list", lambda: calls.append("refresh"))
+    monkeypatch.setattr(app, "log", lambda *args: calls.append(" ".join(map(str, args))))
+
+    app.main()
+
+    assert calls == ["[Startup] Another push-to-talk instance is already running; exiting."]
+
+
 def test_main_handles_keyboard_interrupt_by_exiting_tray(monkeypatch):
     calls = []
+
+    class FakeGuard:
+        def release(self):
+            calls.append("release")
 
     class FakeIcon:
         def __init__(self, *_args):
@@ -1159,6 +1180,7 @@ def test_main_handles_keyboard_interrupt_by_exiting_tray(monkeypatch):
             calls.append("stop")
 
     monkeypatch.setattr(app, "refresh_device_list", lambda: None)
+    monkeypatch.setattr(app, "acquire_app_instance_guard", lambda: FakeGuard())
     monkeypatch.setattr(app, "create_tray_icon_image", lambda: "icon")
     monkeypatch.setattr(app, "build_menu", lambda: "menu")
     monkeypatch.setattr(app.pystray, "Icon", FakeIcon)
@@ -1167,7 +1189,7 @@ def test_main_handles_keyboard_interrupt_by_exiting_tray(monkeypatch):
 
     app.main()
 
-    assert calls == ["\nExiting...", "listener-stop", "stop", "listener-stop"]
+    assert calls == ["\nExiting...", "listener-stop", "stop", "listener-stop", "release"]
 
 
 def test_prompt_for_hotkey_accepts_tokens(monkeypatch, tmp_path: Path):
@@ -1203,9 +1225,10 @@ def test_restart_and_quit_use_systemd_when_managed(monkeypatch):
     assert actions == ["restart", "stop"]
 
 
-def test_restart_app_relaunches_with_managed_entrypoint(monkeypatch, tmp_path: Path):
+def test_restart_app_relaunches_after_current_instance_exits(monkeypatch, tmp_path: Path):
     popen_calls = []
     exit_calls = []
+    monkeypatch.setattr(app.os, "getpid", lambda: 12345)
     monkeypatch.delenv(app.SYSTEMD_MANAGED_ENV, raising=False)
     monkeypatch.setattr(app, "SCRIPT_DIR", tmp_path)
     monkeypatch.setattr(
@@ -1215,12 +1238,16 @@ def test_restart_app_relaunches_with_managed_entrypoint(monkeypatch, tmp_path: P
 
     app.restart_app("tray")
 
-    assert popen_calls == [
-        (
-            ([app.sys.executable, str(tmp_path / "push_to_talk_realtime.py")],),
-            {"cwd": str(tmp_path)},
-        )
+    command = popen_calls[0][0][0]
+    assert command[:2] == [app.sys.executable, "-c"]
+    assert "os.kill(pid, 0)" in command[2]
+    assert command[3:] == [
+        "12345",
+        app.sys.executable,
+        str(tmp_path / "push_to_talk_realtime.py"),
+        str(tmp_path),
     ]
+    assert popen_calls[0][1] == {"cwd": str(tmp_path)}
     assert exit_calls == ["tray"]
 
 

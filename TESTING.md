@@ -57,6 +57,7 @@ CI now runs:
   - Clipboard paste flow, work-log append behavior, and tray status updates.
   - Keyboard and mouse hotkey press/release transitions, double-tap work-log handling, and toggle mode stop behavior.
   - Persisted dictation hotkey kind/tokens, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, menu builders, tray startup/shutdown, and `main()` bootstrap wiring.
+  - Single-instance startup guard and delayed restart helper behavior.
 
 - `test_apply_punctuation_options_normalize_capitalize_terminal`
   - Input: `"  hello   world  "`
@@ -234,6 +235,8 @@ CI now runs:
 - Expected: `Restart service` restarts the service cleanly and the tray returns.
 - Expected: `Quit` stops the service.
 - If running the script directly instead of under systemd, `Restart service` should relaunch `push_to_talk_realtime.py` and `Quit` should only close the current process.
+- Start the app twice manually.
+- Expected: the second launch exits without creating another tray icon or second global hotkey listener.
 
 21) Starter script
 - Run `python start_push_to_talk.py`.

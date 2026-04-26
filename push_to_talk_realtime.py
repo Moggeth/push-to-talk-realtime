@@ -174,6 +174,7 @@ HOTKEY_CAPTURE_HELPER_PATH = SCRIPT_DIR / "hotkey_capture_helper.py"
 SYSTEMD_SERVICE_NAME = os.getenv("PUSH_TO_TALK_SERVICE_NAME", "push-to-talk-realtime.service")
 SYSTEMD_MANAGED_ENV = "PUSH_TO_TALK_MANAGED_BY_SYSTEMD"
 MACOS_LAUNCH_AGENT_NAME = "com.moggeth.push-to-talk-realtime"
+APP_INSTANCE_MUTEX_NAME = "Local\\PushToTalkRealtime_Instance"
 DEFAULT_DEVICE_LABEL = "System default input"
 STEREO_MIX_SEARCH = os.getenv("STEREO_MIX_SEARCH", "Stereo Mix")
 SYSTEM_AUDIO_DEVICE = os.getenv("SYSTEM_AUDIO_DEVICE", "").strip()
@@ -277,6 +278,23 @@ class TrayIconLike(Protocol):
 
     def update_menu(self) -> None: ...
     def stop(self) -> None: ...
+
+
+@dataclass
+class AppInstanceGuard:
+    handle: Any = None
+
+    def release(self) -> None:
+        if self.handle is None or not IS_WINDOWS:
+            self.handle = None
+            return
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.CloseHandle(self.handle)
+        except Exception:  # pylint: disable=broad-except
+            pass
+        self.handle = None
 
 
 @dataclass
@@ -610,6 +628,50 @@ def get_openai_client() -> Any:
 
             openai_client = OpenAI(api_key=OPENAI_API_KEY)
         return openai_client
+
+
+def acquire_app_instance_guard() -> AppInstanceGuard | None:
+    if not IS_WINDOWS:
+        return AppInstanceGuard()
+    try:
+        import ctypes
+
+        error_already_exists = 183
+        ctypes.windll.kernel32.SetLastError(0)
+        handle = ctypes.windll.kernel32.CreateMutexW(None, False, APP_INSTANCE_MUTEX_NAME)
+        if not handle:
+            raise ctypes.WinError()
+        if ctypes.windll.kernel32.GetLastError() == error_already_exists:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return None
+        return AppInstanceGuard(handle=handle)
+    except Exception as exc:  # pylint: disable=broad-except
+        log("[Startup] Single-instance guard unavailable:", exc)
+        return AppInstanceGuard()
+
+
+def restart_helper_command() -> list[str]:
+    helper_code = (
+        "import os, subprocess, sys, time\n"
+        "pid = int(sys.argv[1])\n"
+        "exe, script, cwd = sys.argv[2], sys.argv[3], sys.argv[4]\n"
+        "for _ in range(100):\n"
+        "    try:\n"
+        "        os.kill(pid, 0)\n"
+        "    except OSError:\n"
+        "        break\n"
+        "    time.sleep(0.1)\n"
+        "subprocess.Popen([exe, script], cwd=cwd)\n"
+    )
+    return [
+        sys.executable,
+        "-c",
+        helper_code,
+        str(os.getpid()),
+        sys.executable,
+        str(SCRIPT_DIR / "push_to_talk_realtime.py"),
+        str(SCRIPT_DIR),
+    ]
 
 
 def _prewarm_transcription_stack() -> None:
@@ -2485,10 +2547,7 @@ def restart_app(icon: TrayIconLike | None = None, _item=None) -> None:
         run_systemd_action("restart")
         return
     try:
-        subprocess.Popen(
-            [sys.executable, str(SCRIPT_DIR / "push_to_talk_realtime.py")],
-            cwd=str(SCRIPT_DIR),
-        )
+        subprocess.Popen(restart_helper_command(), cwd=str(SCRIPT_DIR))
     except Exception as exc:  # pylint: disable=broad-except
         log("[Tray] Unable to restart the app:", exc)
         return
@@ -2814,15 +2873,18 @@ def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
 
 def main() -> None:
     global tray_icon
-    refresh_device_list()
-    tray_icon = pystray.Icon(
-        "push_to_talk_realtime",
-        create_tray_icon_image(),
-        TRAY_TITLE,
-        build_menu(),
-    )
-
+    instance_guard = acquire_app_instance_guard()
+    if instance_guard is None:
+        log("[Startup] Another push-to-talk instance is already running; exiting.")
+        return
     try:
+        refresh_device_list()
+        tray_icon = pystray.Icon(
+            "push_to_talk_realtime",
+            create_tray_icon_image(),
+            TRAY_TITLE,
+            build_menu(),
+        )
         tray_icon.run(setup=tray_setup)
     except KeyboardInterrupt:
         log("\nExiting...")
@@ -2830,6 +2892,7 @@ def main() -> None:
     finally:
         stop_input_listeners()
         shutdown_event.set()
+        instance_guard.release()
 
 
 if __name__ == "__main__":

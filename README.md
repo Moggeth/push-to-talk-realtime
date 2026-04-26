@@ -22,6 +22,7 @@ Features
 - Transcription preferences are saved and restored on next launch.
 - Tray controls: `Settings`, `Open transcript history`, `Restart service`, and `Quit`.
 - Busy tray feedback: tray icon shows a spinner while transcription is in progress.
+- Single-instance guard: accidental duplicate launches exit before installing a second global hotkey listener.
 - Tray menu controls:
   - Select one shared input device for both dictation and work-log capture.
   - Toggle beeps, status tooltip, tap-to-toggle mode, and mute monitor.
@@ -42,7 +43,7 @@ Tray Menu
 ---------
 - Settings: shortcuts, model, mode, input device, punctuation, startup, transcript history, and advanced toggles.
 - Open transcript history: opens `work_log.txt`.
-- Restart service: restarts the systemd user service when managed by systemd, otherwise relaunches the tracked tray entry point.
+- Restart service: restarts the systemd user service when managed by systemd, otherwise waits for the current tray instance to exit before relaunching the tracked entry point.
 - Quit: exits the tray app, or stops the systemd user service when managed by systemd.
 
 Settings includes:
