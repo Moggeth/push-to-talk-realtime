@@ -48,6 +48,8 @@ def reset_app_state(monkeypatch, tmp_path: Path):
     app.state = app.SessionState()
     app.tray_icon = None
     app.keyboard_listener = None
+    app.input_listener_watchdog_thread = None
+    app.input_listener_watchdog_stop.set()
     app.DEVICE_LIST = []
     app.shutdown_event.clear()
     monkeypatch.setattr(app, "WORK_LOG_PATH", tmp_path / "work_log.txt")
@@ -487,6 +489,34 @@ def test_start_and_stop_keyboard_listener_manage_single_listener(monkeypatch):
     assert listener.on_release is app.on_release
     assert events == ["start", "stop"]
     assert app.keyboard_listener is None
+
+
+def test_start_keyboard_listener_replaces_dead_listener(monkeypatch):
+    events = []
+
+    class DeadListener:
+        def is_alive(self):
+            return False
+
+    class FakeListener:
+        def __init__(self, on_press, on_release):
+            self.on_press = on_press
+            self.on_release = on_release
+
+        def is_alive(self):
+            return True
+
+        def start(self):
+            events.append("start")
+
+    app.keyboard_listener = DeadListener()
+    monkeypatch.setattr(app.pynput_keyboard, "Listener", FakeListener)
+    monkeypatch.setattr(app, "log", lambda *args: events.append("log"))
+
+    app.start_keyboard_listener()
+
+    assert isinstance(app.keyboard_listener, FakeListener)
+    assert events == ["log", "start"]
 
 
 def test_start_and_stop_input_listeners_run_keyboard_only(monkeypatch):

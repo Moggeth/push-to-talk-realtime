@@ -23,6 +23,8 @@ Features
 - Tray controls: `Settings`, `Open transcript history`, `Restart service`, and `Quit`.
 - Busy tray feedback: tray icon shows a spinner while transcription is in progress.
 - Single-instance guard: accidental duplicate launches exit before installing a second global hotkey listener.
+- Startup hardening: the ready message is logged only after the global hotkey listener starts, and a watchdog restarts the listener if it stops unexpectedly.
+- First-press reliability: if the dictation key is released while the audio session is still starting, the release is remembered and applied as soon as recording becomes active.
 - Tray menu controls:
   - Select one shared input device for both dictation and work-log capture.
   - Toggle beeps, status tooltip, tap-to-toggle mode, and mute monitor.

@@ -56,8 +56,9 @@ CI now runs:
   - Device descriptor resolution, fallback device picking, and device list refresh.
   - Clipboard paste flow, work-log append behavior, and tray status updates.
   - Keyboard and mouse hotkey press/release transitions, double-tap work-log handling, and toggle mode stop behavior.
+  - First-press startup race handling: a release that arrives while a session is still starting is remembered and stops the new recording cleanly.
   - Persisted dictation hotkey kind/tokens, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, menu builders, tray startup/shutdown, and `main()` bootstrap wiring.
-  - Single-instance startup guard and delayed restart helper behavior.
+  - Single-instance startup guard, hotkey-listener watchdog restart, and delayed restart helper behavior.
 
 - `test_apply_punctuation_options_normalize_capitalize_terminal`
   - Input: `"  hello   world  "`
@@ -134,7 +135,7 @@ CI now runs:
 
 1) Startup
 - Run: `python .\push_to_talk_realtime.py`
-- Expected: a tray icon appears and the console prints the ready message.
+- Expected: a tray icon appears and the console prints the ready message after the hotkey listener is active.
 
 2) Dictation hotkey (F13 by default)
 - Hold the mouse button remapped to F13, speak one sentence, release.
@@ -142,6 +143,7 @@ CI now runs:
   pastes into the active app.
 - While transcription is processing after key release, the tray icon shows a spinning
   indicator until transcription completes.
+- Immediately after launch, do one short hold/release. Expected: the release is honored even if the audio session is still starting.
 
 3) Set Hotkey dialog
 - Open the tray menu, click `Settings` -> `Set dictation hotkey...`, press a key or combo, confirm the drafted label looks right, then click `Accept`.

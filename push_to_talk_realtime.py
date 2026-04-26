@@ -303,6 +303,9 @@ class SessionState:
     is_transcribing: bool = False
     transcribing_session_count: int = 0
     session_start_pending: bool = False
+    pending_start_hotkey_kind: str = ""
+    pending_start_hotkey_tokens: tuple[str, ...] = ()
+    pending_start_stop_requested: bool = False
     should_stop: bool = False
     transcript_final: str = ""
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -353,6 +356,9 @@ class SessionState:
 state = SessionState()
 shutdown_event = threading.Event()
 keyboard_listener: pynput_keyboard.Listener | None = None
+keyboard_listener_lock = threading.Lock()
+input_listener_watchdog_thread: threading.Thread | None = None
+input_listener_watchdog_stop = threading.Event()
 tray_icon: TrayIconLike | None = None
 tray_animation_thread: threading.Thread | None = None
 DEVICE_LIST: list[tuple[int, str]] = []
@@ -706,6 +712,8 @@ def _prewarm_transcription_stack() -> None:
 
 def start_transcription_warmup() -> None:
     if transcription_warmup_started.is_set() or not OPENAI_API_KEY:
+        if not OPENAI_API_KEY:
+            transcription_warmup_finished.set()
         return
     transcription_warmup_started.set()
     threading.Thread(target=_prewarm_transcription_stack, daemon=True).start()
@@ -856,23 +864,56 @@ def append_dictation_history_entry(text: str) -> None:
 
 def start_keyboard_listener() -> None:
     global keyboard_listener
-    if keyboard_listener is None:
+    with keyboard_listener_lock:
+        if keyboard_listener is not None:
+            is_alive = getattr(keyboard_listener, "is_alive", None)
+            if not callable(is_alive) or is_alive():
+                return
+            log("[Input] Keyboard listener stopped unexpectedly; restarting.")
+            keyboard_listener = None
         keyboard_listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
         keyboard_listener.start()
 
 
 def stop_keyboard_listener() -> None:
     global keyboard_listener
-    if keyboard_listener is not None:
-        keyboard_listener.stop()
-        keyboard_listener = None
+    with keyboard_listener_lock:
+        if keyboard_listener is not None:
+            keyboard_listener.stop()
+            keyboard_listener = None
+
+
+def input_listener_watchdog_loop() -> None:
+    while not shutdown_event.is_set() and not input_listener_watchdog_stop.wait(5.0):
+        try:
+            start_keyboard_listener()
+        except Exception as exc:  # pylint: disable=broad-except
+            log("[Input] Keyboard listener watchdog restart failed:", exc)
+
+
+def start_input_listener_watchdog() -> None:
+    global input_listener_watchdog_thread
+    input_listener_watchdog_stop.clear()
+    if input_listener_watchdog_thread is not None and input_listener_watchdog_thread.is_alive():
+        return
+    input_listener_watchdog_thread = threading.Thread(
+        target=input_listener_watchdog_loop,
+        daemon=True,
+    )
+    input_listener_watchdog_thread.start()
+
+
+def stop_input_listener_watchdog() -> None:
+    input_listener_watchdog_stop.set()
 
 
 def start_input_listeners() -> None:
     start_keyboard_listener()
+    start_input_listener_watchdog()
 
 
 def stop_input_listeners() -> None:
+    stop_input_listener_watchdog()
     stop_keyboard_listener()
 
 
@@ -1669,6 +1710,9 @@ def begin_session_start(
         if state.is_listening or state.session_start_pending:
             return False
         state.session_start_pending = True
+        state.pending_start_hotkey_kind = hotkey_kind
+        state.pending_start_hotkey_tokens = hotkey_tokens
+        state.pending_start_stop_requested = False
     try:
         threading.Thread(
             target=start_listening,
@@ -1678,6 +1722,9 @@ def begin_session_start(
     except Exception:
         with state.lock:
             state.session_start_pending = False
+            state.pending_start_hotkey_kind = ""
+            state.pending_start_hotkey_tokens = ()
+            state.pending_start_stop_requested = False
         raise
     return True
 
@@ -1694,6 +1741,9 @@ def start_listening(
         log("ERROR: OPENAI_API_KEY not set.")
         with state.lock:
             state.session_start_pending = False
+            state.pending_start_hotkey_kind = ""
+            state.pending_start_hotkey_tokens = ()
+            state.pending_start_stop_requested = False
         return
     enforce_transcription_engine_dependencies()
 
@@ -1704,14 +1754,25 @@ def start_listening(
     with state.lock:
         if state.is_listening:
             state.session_start_pending = False
+            state.pending_start_hotkey_kind = ""
+            state.pending_start_hotkey_tokens = ()
+            state.pending_start_stop_requested = False
             return
+        stop_requested_during_start = (
+            state.pending_start_hotkey_kind == hotkey_kind
+            and state.pending_start_hotkey_tokens == hotkey_tokens
+            and state.pending_start_stop_requested
+        )
         state.session_counter += 1
         session_id = state.session_counter
         state.active_session_id = session_id
         state.session_start_pending = False
+        state.pending_start_hotkey_kind = ""
+        state.pending_start_hotkey_tokens = ()
+        state.pending_start_stop_requested = False
         state.is_listening = True
         state.is_transcribing = False
-        state.should_stop = False
+        state.should_stop = stop_requested_during_start
         state.transcript_final = ""
         state.muted_warning = False
         state.last_audio_time = time.monotonic()
@@ -2166,6 +2227,12 @@ def on_release(key):
             if is_shift_key_name(key_name):
                 state.shift_keys_down.discard(key_name)
             return
+        if (
+            state.session_start_pending
+            and state.pending_start_hotkey_kind == HOTKEY_KIND_KEYBOARD
+            and key_name in state.pending_start_hotkey_tokens
+        ):
+            state.pending_start_stop_requested = True
         if (
             state.is_listening
             and state.active_hotkey_kind == HOTKEY_KIND_KEYBOARD
@@ -2847,6 +2914,8 @@ def tray_setup(_icon: TrayIconLike) -> None:
     _icon.visible = True  # required when using a custom setup callback
     enforce_transcription_engine_dependencies()
     start_transcription_warmup()
+    start_tray_animation_loop()
+    start_input_listeners()
     with state.lock:
         selected_engine = state.transcription_engine
         selected_model = state.recorded_transcription_model
@@ -2858,8 +2927,6 @@ def tray_setup(_icon: TrayIconLike) -> None:
     if selected_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
         log("[Transcription engine] Strict server-side realtime mode enabled (no local fallback).")
     refresh_tray_menu()
-    start_tray_animation_loop()
-    start_input_listeners()
 
 
 def tray_exit(icon: TrayIconLike | None, _item=None) -> None:

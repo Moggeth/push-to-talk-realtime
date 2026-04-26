@@ -77,6 +77,15 @@ class TranscriptionWarmupTests(unittest.TestCase):
         self.assertEqual(1, fake_client.models.calls)
         self.assertTrue(push_to_talk.transcription_warmup_finished.is_set())
 
+    def test_start_transcription_warmup_marks_finished_without_api_key(self) -> None:
+        push_to_talk.OPENAI_API_KEY = ""
+
+        with patch.object(push_to_talk.threading, "Thread", ThreadRecorder):
+            push_to_talk.start_transcription_warmup()
+
+        self.assertEqual(0, len(ThreadRecorder.instances))
+        self.assertTrue(push_to_talk.transcription_warmup_finished.is_set())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -36,6 +36,9 @@ class HotkeySessionStartTests(unittest.TestCase):
             push_to_talk.state.is_listening = False
             push_to_talk.state.is_transcribing = False
             push_to_talk.state.session_start_pending = False
+            push_to_talk.state.pending_start_hotkey_kind = ""
+            push_to_talk.state.pending_start_hotkey_tokens = ()
+            push_to_talk.state.pending_start_stop_requested = False
             push_to_talk.state.should_stop = False
             push_to_talk.state.toggle_mode_enabled = False
             push_to_talk.state.active_hotkey = ""
@@ -64,6 +67,9 @@ class HotkeySessionStartTests(unittest.TestCase):
             push_to_talk.state.is_listening = False
             push_to_talk.state.is_transcribing = False
             push_to_talk.state.session_start_pending = False
+            push_to_talk.state.pending_start_hotkey_kind = ""
+            push_to_talk.state.pending_start_hotkey_tokens = ()
+            push_to_talk.state.pending_start_stop_requested = False
             push_to_talk.state.should_stop = False
 
     def test_repeated_dictation_keydown_only_queues_one_session(self) -> None:
@@ -77,6 +83,51 @@ class HotkeySessionStartTests(unittest.TestCase):
         self.assertTrue(ThreadRecorder.instances[0].started)
         with push_to_talk.state.lock:
             self.assertTrue(push_to_talk.state.session_start_pending)
+
+    def test_release_during_pending_start_is_remembered(self) -> None:
+        key = SimpleNamespace(name=push_to_talk.state.dictation_hotkey_tokens[0].lower())
+
+        with patch.object(push_to_talk.threading, "Thread", ThreadRecorder):
+            push_to_talk.on_press(key)
+            push_to_talk.on_release(key)
+
+        with push_to_talk.state.lock:
+            self.assertTrue(push_to_talk.state.session_start_pending)
+            self.assertTrue(push_to_talk.state.pending_start_stop_requested)
+
+    def test_start_listening_honors_release_that_arrived_during_start(self) -> None:
+        push_to_talk.OPENAI_API_KEY = "test-key"
+        key_tokens = push_to_talk.state.dictation_hotkey_tokens
+        with push_to_talk.state.lock:
+            push_to_talk.state.session_start_pending = True
+            push_to_talk.state.pending_start_hotkey_kind = push_to_talk.HOTKEY_KIND_KEYBOARD
+            push_to_talk.state.pending_start_hotkey_tokens = key_tokens
+            push_to_talk.state.pending_start_stop_requested = True
+
+        with (
+            patch.object(push_to_talk, "enforce_transcription_engine_dependencies"),
+            patch.object(
+                push_to_talk,
+                "start_recorder_with_fallback",
+                return_value=(True, None, push_to_talk.DEFAULT_DEVICE_LABEL),
+            ),
+            patch.object(push_to_talk, "transcribe_audio", return_value=""),
+            patch.object(push_to_talk, "maybe_beep"),
+            patch.object(push_to_talk, "log"),
+        ):
+            push_to_talk.start_listening(
+                push_to_talk.MODE_DICTATION,
+                push_to_talk.HOTKEY_DICTATION,
+                push_to_talk.HOTKEY_KIND_KEYBOARD,
+                key_tokens,
+                None,
+                push_to_talk.DEFAULT_DEVICE_LABEL,
+            )
+
+        with push_to_talk.state.lock:
+            self.assertFalse(push_to_talk.state.session_start_pending)
+            self.assertFalse(push_to_talk.state.pending_start_stop_requested)
+            self.assertFalse(push_to_talk.state.is_listening)
 
     def test_dictation_can_start_while_previous_audio_is_still_transcribing(self) -> None:
         key = SimpleNamespace(name=push_to_talk.state.dictation_hotkey_tokens[0].lower())
