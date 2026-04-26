@@ -2486,7 +2486,7 @@ def restart_app(icon: TrayIconLike | None = None, _item=None) -> None:
         return
     try:
         subprocess.Popen(
-            [sys.executable, str(SCRIPT_DIR / "push_to_talk_realtime.py")],
+            [sys.executable, str(STARTER_SCRIPT_PATH)],
             cwd=str(SCRIPT_DIR),
         )
     except Exception as exc:  # pylint: disable=broad-except
@@ -2646,19 +2646,60 @@ def build_options_menu() -> pystray.Menu:
     )
 
 
-def build_menu() -> pystray.Menu:
+def build_advanced_settings_menu() -> pystray.Menu:
+    return pystray.Menu(
+        pystray.MenuItem(
+            "Toggle mode",
+            toggle_toggle_mode,
+            checked=lambda _item: state.toggle_mode_enabled,
+        ),
+        pystray.MenuItem(
+            "Beeps",
+            toggle_beeps,
+            checked=lambda _item: state.beeps_enabled,
+        ),
+        pystray.MenuItem(
+            "Status tooltip",
+            toggle_tooltip,
+            checked=lambda _item: state.tooltip_enabled,
+        ),
+        pystray.MenuItem(
+            "Mute monitor",
+            toggle_monitor,
+            checked=lambda _item: state.monitor_enabled,
+        ),
+        pystray.MenuItem("Refresh audio devices", refresh_audio_devices),
+    )
+
+
+def build_settings_menu() -> pystray.Menu:
     return pystray.Menu(
         pystray.MenuItem(f"Dictation hotkey: {dictation_hotkey_summary()}", None, enabled=False),
         pystray.MenuItem(f"Work log hotkey: {HOTKEY_WORKLOG}", None, enabled=False),
-        pystray.MenuItem("Set Hotkey...", prompt_for_hotkey),
-        pystray.MenuItem("Options", build_options_menu()),
-        pystray.MenuItem("Transcription mode", build_transcription_menu()),
+        pystray.MenuItem("Set dictation hotkey...", prompt_for_hotkey),
         pystray.MenuItem("Recorded model", build_recorded_transcription_model_menu()),
-        pystray.MenuItem("Punctuation", build_punctuation_menu()),
+        pystray.MenuItem("Transcription mode", build_transcription_menu()),
         pystray.MenuItem("Input device", build_input_device_menu()),
-        pystray.MenuItem("Refresh audio devices", refresh_audio_devices),
+        pystray.MenuItem("Punctuation", build_punctuation_menu()),
+        pystray.MenuItem(
+            "Run at login",
+            toggle_run_on_startup,
+            checked=lambda _item: is_run_on_startup_enabled(),
+        ),
+        pystray.MenuItem(
+            "Save transcript history",
+            toggle_dictation_history,
+            checked=lambda _item: state.dictation_history_enabled,
+        ),
+        pystray.MenuItem("Advanced", build_advanced_settings_menu()),
+    )
+
+
+def build_menu() -> pystray.Menu:
+    return pystray.Menu(
+        pystray.MenuItem("Settings", build_settings_menu()),
         pystray.MenuItem("Open transcript history", open_work_log),
-        pystray.MenuItem("Restart", restart_app),
+        pystray.MenuItem("Restart service", restart_app),
         pystray.MenuItem("Quit", quit_app),
     )
 

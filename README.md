@@ -3,9 +3,8 @@ Push-to-talk Transcription
 
 Hold a hotkey to record from your microphone, transcribe audio, and paste
 the transcript into the active window. A second hotkey logs dictations as
-timestamped work entries. The app runs from a system tray icon with submenus
-for input device selection, hotkey management, punctuation rules, and QoL
-toggles.
+timestamped work entries. The app runs from a compact system tray menu with a
+small Settings submenu for less common controls.
 
 This repository is standalone. It does not depend on Personal Package Manager,
 although external launchers can still start it by pointing at this checkout.
@@ -21,7 +20,7 @@ Features
 - Recorded model selector: choose GPT-4o Transcribe, GPT-4o Mini Transcribe, or Whisper for the record-then-paste path.
 - Realtime live dictation: GPT-4o Realtime streams server-side transcript deltas while you are still holding the hotkey.
 - Transcription preferences are saved and restored on next launch.
-- Tray controls: `Set Hotkey...`, transcript-history toggle, `Run on startup`, `Restart`, and `Quit`.
+- Tray controls: `Settings`, `Open transcript history`, `Restart service`, and `Quit`.
 - Busy tray feedback: tray icon shows a spinner while transcription is in progress.
 - Tray menu controls:
   - Select one shared input device for both dictation and work-log capture.
@@ -41,32 +40,28 @@ Hotkeys
 
 Tray Menu
 ---------
-- Dictation hotkey / Work log hotkey: show the currently active shortcuts.
-- Set Hotkey...: opens a small capture window, shows the drafted key combo, then saves it only after you click `Accept`.
-- Options:
-  - Save transcript history: on by default; when enabled, each final dictation is appended to `work_log.txt`.
-  - Run on startup: installs or removes the platform startup hook for the current checkout.
-  - Toggle mode: tap the hotkey once to start, tap again to stop.
-  - Beeps: playful two-tone sound on start/stop (Windows only).
-  - Status tooltip: shows Ready/Listening/Transcribing + device + mute hint.
-  - Mute monitor: warns if you start recording but the mic stays silent.
-- Transcription mode:
-  - Record then paste: transcribes after key release and preserves the original clipboard/paste workflow.
-  - GPT-4o Realtime: strict server-side websocket transcription with server VAD; streams deltas while recording, then finalizes on release.
+- Settings: shortcuts, model, mode, input device, punctuation, startup, transcript history, and advanced toggles.
+- Open transcript history: opens `work_log.txt`.
+- Restart service: restarts the systemd user service when managed by systemd, otherwise relaunches this checkout through `start_push_to_talk.py`.
+- Quit: exits the tray app, or stops the systemd user service when managed by systemd.
+
+Settings includes:
+- Set dictation hotkey...: opens a small capture window, shows the drafted key combo, then saves it only after you click `Accept`.
 - Recorded model:
   - GPT-4o Transcribe: default quality/latency trade-off for the record-then-paste path.
   - GPT-4o Mini Transcribe: usually fastest recorded model.
   - Whisper: legacy fallback for the original behavior.
+- Transcription mode:
+  - Record then paste: transcribes after key release and preserves the original clipboard/paste workflow.
+  - GPT-4o Realtime: strict server-side websocket transcription with server VAD; streams deltas while recording, then finalizes on release.
 - Punctuation:
   - Suffix: None / Space / Newline (affects pasted dictation only).
   - Ensure terminal punctuation (adds "." if missing; enabled by default).
   - Capitalize first letter.
   - Normalize whitespace.
-- Input device: choose the shared input device used for both dictation and work-log capture.
-- Refresh audio devices.
-- Open transcript history.
-- Restart: restart the app, or restart the user service if the app is running under systemd.
-- Quit: exit the app, or stop the user service if the app is running under systemd.
+- Run at login: installs or removes the platform startup hook for the current checkout.
+- Save transcript history: on by default; when enabled, each final dictation is appended to `work_log.txt`.
+- Advanced: toggle mode, beeps, status tooltip, mute monitor, and refresh audio devices.
 
 Setup
 -----
@@ -101,7 +96,7 @@ python .\start_push_to_talk.py
 
 Run on startup
 --------------
-The easiest path is the tray menu: open `Options` -> `Run on startup`.
+The easiest path is the tray menu: open `Settings` -> `Run at login`.
 
 That toggle writes the right startup hook for the current platform:
 - Linux: a user systemd service in `~/.config/systemd/user/`

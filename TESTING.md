@@ -143,19 +143,19 @@ CI now runs:
   indicator until transcription completes.
 
 3) Set Hotkey dialog
-- Open the tray menu, click `Set Hotkey...`, press a key or combo, confirm the drafted label looks right, then click `Accept`.
+- Open the tray menu, click `Settings` -> `Set dictation hotkey...`, press a key or combo, confirm the drafted label looks right, then click `Accept`.
 - Expected: the tray menu immediately shows the new dictation hotkey.
 - Expected: the hotkey only starts dictation when the drafted keys are the only keys being held, except for `Shift + hotkey` system-audio capture.
 
 4) Realtime live typing (GPT-4o Realtime)
-- In tray menu, set "Transcription mode" -> "GPT-4o Realtime".
+- In tray menu, set "Settings" -> "Transcription mode" -> "GPT-4o Realtime".
 - Hold Caps Lock and speak 1-2 sentences.
 - Expected: text starts appearing before key release; releasing Caps Lock finalizes punctuation/suffix.
 - Expected: realtime behavior is server-side; no local chunking fallback should appear in logs.
 - Expected: no `invalid_model` websocket errors when using the default realtime websocket URL.
 
 5) Shared input device menu
-- Open the tray menu, choose `Input device`, then select a different microphone/input.
+- Open the tray menu, choose `Settings` -> `Input device`, then select a different microphone/input.
 - Expected: both normal dictation and work-log capture switch to the same selected device.
 
 6) System audio dictation
@@ -177,14 +177,14 @@ CI now runs:
 
 9) Punctuation toggles
 - Toggle "Ensure terminal punctuation", "Capitalize first letter", and
-  "Normalize whitespace" from the tray menu.
+  "Normalize whitespace" from `Settings` -> `Punctuation`.
 - Expected: dictation + work log reflect the settings on the next run.
 
 10) Transcription mode and recorded model toggles
-- In tray menu, switch "Transcription mode" between Record then paste and GPT-4o Realtime.
+- In tray menu, switch "Settings" -> "Transcription mode" between Record then paste and GPT-4o Realtime.
 - Expected: selected radio item updates immediately and next dictation uses that engine.
 - Expected: when GPT-4o Realtime is active, there is no automatic Whisper fallback.
-- In tray menu, switch "Recorded model" between GPT-4o Transcribe, GPT-4o Mini Transcribe, and Whisper.
+- In tray menu, switch "Settings" -> "Recorded model" between GPT-4o Transcribe, GPT-4o Mini Transcribe, and Whisper.
 - Expected: next record-then-paste dictation uses the selected recorded model.
 
 11) Engine preference persistence
@@ -198,7 +198,7 @@ CI now runs:
 13) Transcript history (default on)
 - Dictate once with the normal dictation hotkey, then open the history file from the tray.
 - Expected: a new line is appended with a full date/time stamp and a `[Dictation]` tag.
-- In `Options`, toggle `Save transcript history` off, dictate again, and confirm no new dictation history line is added.
+- In `Settings`, toggle `Save transcript history` off, dictate again, and confirm no new dictation history line is added.
 
 14) Work log hotkey (F14 by default)
 - Hold F14 for at least ~0.25s, speak a short sentence, release.
@@ -223,17 +223,17 @@ CI now runs:
 - Expected: both transcripts still appear, and they paste in the order the recordings were made.
 
 19) Run on startup toggle
-- Open `Options` -> `Run on startup`.
+- Open `Settings` -> `Run at login`.
 - Expected on Linux: a user systemd service is written/enabled for the current checkout and starts immediately.
 - Expected on Windows/macOS: the platform startup artifact is created for the current checkout.
 - Toggle it off again.
 - Expected: the startup artifact is disabled or removed cleanly.
 
 20) Tray restart and quit actions
-- If running under the included user systemd service on Linux, click `Restart` and `Quit` from the tray.
-- Expected: `Restart` restarts the service cleanly and the tray returns.
+- If running under the included user systemd service on Linux, click `Restart service` and `Quit` from the tray.
+- Expected: `Restart service` restarts the service cleanly and the tray returns.
 - Expected: `Quit` stops the service.
-- If running the script directly instead of under systemd, `Restart` should relaunch the script and `Quit` should only close the current process.
+- If running the script directly instead of under systemd, `Restart service` should relaunch through `start_push_to_talk.py` and `Quit` should only close the current process.
 
 21) Starter script
 - Run `python start_push_to_talk.py`.
@@ -246,5 +246,5 @@ CI now runs:
 23) Ubuntu tray interactivity
 - On Ubuntu GNOME/Wayland, launch the app from `python start_push_to_talk.py`.
 - Left-click or right-click the tray icon.
-- Expected: the tray menu opens and actions such as `Set Hotkey...`, `Restart`, and `Quit` are clickable.
-- Expected: there are no preset entries such as `Default (no frills)` or `Bells and whistles`; individual toggles remain under `Options`.
+- Expected: the tray menu opens and actions such as `Settings`, `Restart service`, and `Quit` are clickable.
+- Expected: there are no preset entries such as `Default (no frills)` or `Bells and whistles`; individual toggles remain under `Settings` -> `Advanced`.

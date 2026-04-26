@@ -973,10 +973,14 @@ def test_menu_builders_include_expected_top_level_items(monkeypatch):
     app.DEVICE_LIST = [(2, "USB Mic")]
 
     punctuation_menu = app.build_punctuation_menu()
-    options_menu = app.build_options_menu()
+    advanced_menu = app.build_advanced_settings_menu()
     monkeypatch.setattr(app, "build_input_device_menu", lambda: "device")
-    monkeypatch.setattr(app, "build_options_menu", lambda: "options")
+    monkeypatch.setattr(app, "build_recorded_transcription_model_menu", lambda: "models")
+    monkeypatch.setattr(app, "build_transcription_menu", lambda: "mode")
     monkeypatch.setattr(app, "build_punctuation_menu", lambda: "punctuation")
+    monkeypatch.setattr(app, "build_advanced_settings_menu", lambda: "advanced")
+    settings_menu = app.build_settings_menu()
+    monkeypatch.setattr(app, "build_settings_menu", lambda: "settings")
     menu = app.build_menu()
 
     assert [item.text for item in punctuation_menu] == [
@@ -987,26 +991,29 @@ def test_menu_builders_include_expected_top_level_items(monkeypatch):
         "Capitalize first letter",
         "Normalize whitespace",
     ]
-    assert [item.text for item in options_menu] == [
-        "Save transcript history",
-        "Run on startup",
-        "Toggle mode (tap to start/stop)",
+    assert [item.text for item in advanced_menu] == [
+        "Toggle mode",
         "Beeps",
         "Status tooltip",
         "Mute monitor",
+        "Refresh audio devices",
     ]
-    assert [item.text for item in menu] == [
+    assert [item.text for item in settings_menu] == [
         f"Dictation hotkey: {app.dictation_hotkey_summary()}",
         f"Work log hotkey: {app.HOTKEY_WORKLOG}",
-        "Set Hotkey...",
-        "Options",
-        "Transcription mode",
+        "Set dictation hotkey...",
         "Recorded model",
-        "Punctuation",
+        "Transcription mode",
         "Input device",
-        "Refresh audio devices",
+        "Punctuation",
+        "Run at login",
+        "Save transcript history",
+        "Advanced",
+    ]
+    assert [item.text for item in menu] == [
+        "Settings",
         "Open transcript history",
-        "Restart",
+        "Restart service",
         "Quit",
     ]
 
@@ -1186,6 +1193,24 @@ def test_restart_and_quit_use_systemd_when_managed(monkeypatch):
     app.quit_app()
 
     assert actions == ["restart", "stop"]
+
+
+def test_restart_app_relaunches_with_starter_script(monkeypatch, tmp_path: Path):
+    popen_calls = []
+    exit_calls = []
+    starter = tmp_path / "start_push_to_talk.py"
+    monkeypatch.delenv(app.SYSTEMD_MANAGED_ENV, raising=False)
+    monkeypatch.setattr(app, "SCRIPT_DIR", tmp_path)
+    monkeypatch.setattr(app, "STARTER_SCRIPT_PATH", starter)
+    monkeypatch.setattr(
+        app.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append((args, kwargs))
+    )
+    monkeypatch.setattr(app, "tray_exit", lambda icon=None: exit_calls.append(icon))
+
+    app.restart_app("tray")
+
+    assert popen_calls == [(([app.sys.executable, str(starter)],), {"cwd": str(tmp_path)})]
+    assert exit_calls == ["tray"]
 
 
 def test_render_linux_systemd_service_uses_current_paths(monkeypatch, tmp_path: Path):
