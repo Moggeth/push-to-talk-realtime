@@ -29,13 +29,13 @@ Features
 
 Hotkeys
 -------
-- Dictation: `Caps Lock` by default
-- System audio dictation: hold `Shift + Caps Lock` to capture the currently playing system audio input (defaults to a Stereo Mix-style device when available).
+- Dictation: `F13` by default, intended for a mouse button remapped to F13.
+- System audio dictation: hold `Shift + F13` to capture the currently playing system audio input (defaults to a Stereo Mix-style device when available).
 - Work log: `F14` by default
 - Work log: hold `F14` (more than ~0.25s) to record, or double-tap `F14` to open `work_log.txt`.
 - `Set Hotkey...` captures the exact drafted key or key combo and asks you to accept it before saving.
 - The dictation keyboard hotkey only fires when the drafted keys are the only keys being held, except for the special `Shift + hotkey` system-audio path.
-- Recommended Windows setup: map your mouse side button to `F13` in your mouse software. It is usually much less collision-prone than `F8`.
+- Recommended Windows setup: map your mouse side button to `F13` in your mouse software. It is usually much less collision-prone than common keyboard keys.
 - Override hotkeys with `DICTATION_HOTKEY` / `WORKLOG_HOTKEY`, or set `dictation_hotkey`, `dictation_hotkey_kind`, `dictation_hotkey_tokens`, and `worklog_hotkey` in `settings.json`.
 
 Tray Menu
@@ -160,7 +160,7 @@ Environment variables:
 - `REALTIME_SERVER_VAD_PREFIX_MS` (optional): server VAD prefix padding in ms, default `300`.
 - `REALTIME_SERVER_VAD_SILENCE_MS` (optional): server VAD silence duration in ms, default `700`.
 - `PUSH_TO_TALK_SETTINGS_PATH` (optional): override path for persisted tray settings (`settings.json` by default).
-- `DICTATION_HOTKEY` (optional): single-key trigger for dictation, default `CAPS_LOCK`.
+- `DICTATION_HOTKEY` (optional): single-key trigger for dictation, default `F13`.
 - `WORKLOG_HOTKEY` (optional): single-key trigger for work log capture, default `F14`.
 - `PUSH_TO_TALK_SERVICE_NAME` (optional): service name used by the tray `Restart` / `Quit` actions, default `push-to-talk-realtime.service`.
 - `DICTATION_DEVICE` (optional): device index or name fragment for the shared microphone input.

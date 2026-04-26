@@ -112,6 +112,14 @@ def test_normalize_hotkey_name_maps_capslock_alias():
     assert app.normalize_hotkey_name("capslock", app.DEFAULT_HOTKEY_DICTATION) == "CAPS_LOCK"
 
 
+def test_default_dictation_hotkey_is_mouse_remap_f13():
+    fresh_state = app.SessionState()
+
+    assert app.DEFAULT_HOTKEY_DICTATION == "F13"
+    assert fresh_state.dictation_hotkey_tokens == ("F13",)
+    assert fresh_state.dictation_hotkey_label == "F13"
+
+
 def test_prepare_clipboard_text_uses_state_flags(monkeypatch):
     captured = {}
     monkeypatch.setattr(
