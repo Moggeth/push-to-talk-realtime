@@ -233,7 +233,7 @@ CI now runs:
 - If running under the included user systemd service on Linux, click `Restart service` and `Quit` from the tray.
 - Expected: `Restart service` restarts the service cleanly and the tray returns.
 - Expected: `Quit` stops the service.
-- If running the script directly instead of under systemd, `Restart service` should relaunch through `start_push_to_talk.py` and `Quit` should only close the current process.
+- If running the script directly instead of under systemd, `Restart service` should relaunch `push_to_talk_realtime.py` and `Quit` should only close the current process.
 
 21) Starter script
 - Run `python start_push_to_talk.py`.

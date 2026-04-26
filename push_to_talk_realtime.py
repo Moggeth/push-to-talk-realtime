@@ -2486,7 +2486,7 @@ def restart_app(icon: TrayIconLike | None = None, _item=None) -> None:
         return
     try:
         subprocess.Popen(
-            [sys.executable, str(STARTER_SCRIPT_PATH)],
+            [sys.executable, str(SCRIPT_DIR / "push_to_talk_realtime.py")],
             cwd=str(SCRIPT_DIR),
         )
     except Exception as exc:  # pylint: disable=broad-except

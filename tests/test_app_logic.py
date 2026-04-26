@@ -1203,13 +1203,11 @@ def test_restart_and_quit_use_systemd_when_managed(monkeypatch):
     assert actions == ["restart", "stop"]
 
 
-def test_restart_app_relaunches_with_starter_script(monkeypatch, tmp_path: Path):
+def test_restart_app_relaunches_with_managed_entrypoint(monkeypatch, tmp_path: Path):
     popen_calls = []
     exit_calls = []
-    starter = tmp_path / "start_push_to_talk.py"
     monkeypatch.delenv(app.SYSTEMD_MANAGED_ENV, raising=False)
     monkeypatch.setattr(app, "SCRIPT_DIR", tmp_path)
-    monkeypatch.setattr(app, "STARTER_SCRIPT_PATH", starter)
     monkeypatch.setattr(
         app.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append((args, kwargs))
     )
@@ -1217,7 +1215,12 @@ def test_restart_app_relaunches_with_starter_script(monkeypatch, tmp_path: Path)
 
     app.restart_app("tray")
 
-    assert popen_calls == [(([app.sys.executable, str(starter)],), {"cwd": str(tmp_path)})]
+    assert popen_calls == [
+        (
+            ([app.sys.executable, str(tmp_path / "push_to_talk_realtime.py")],),
+            {"cwd": str(tmp_path)},
+        )
+    ]
     assert exit_calls == ["tray"]
 
 

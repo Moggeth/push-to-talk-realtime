@@ -42,7 +42,7 @@ Tray Menu
 ---------
 - Settings: shortcuts, model, mode, input device, punctuation, startup, transcript history, and advanced toggles.
 - Open transcript history: opens `work_log.txt`.
-- Restart service: restarts the systemd user service when managed by systemd, otherwise relaunches this checkout through `start_push_to_talk.py`.
+- Restart service: restarts the systemd user service when managed by systemd, otherwise relaunches the tracked tray entry point.
 - Quit: exits the tray app, or stops the systemd user service when managed by systemd.
 
 Settings includes:
