@@ -447,6 +447,7 @@ def test_recorded_transcription_model_aliases_and_selector(monkeypatch):
     assert app.SessionState().recorded_transcription_model == "whisper-1"
     assert app.normalize_recorded_transcription_model("whisper") == "whisper-1"
     assert app.normalize_recorded_transcription_model("gpt-4o") == "gpt-4o-transcribe"
+    assert app.normalize_recorded_transcription_model("unknown-model") == "whisper-1"
 
     app.set_recorded_transcription_model("gpt-4o-mini-transcribe")
 

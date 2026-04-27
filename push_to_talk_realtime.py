@@ -210,7 +210,7 @@ def normalize_recorded_transcription_model(model: str) -> str:
     normalized = aliases.get(normalized, normalized)
     if normalized in RECORDED_TRANSCRIBE_MODEL_OPTIONS:
         return normalized
-    return "gpt-4o-transcribe"
+    return "whisper-1"
 
 
 def recorded_transcription_model_label(model: str) -> str:
