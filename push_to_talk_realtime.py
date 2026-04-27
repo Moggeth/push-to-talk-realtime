@@ -94,7 +94,7 @@ RECORDED_TRANSCRIBE_MODEL_LABELS = {
     "whisper-1": "Whisper",
 }
 DEFAULT_RECORDED_TRANSCRIBE_MODEL = (
-    os.getenv("OPENAI_TRANSCRIBE_MODEL") or os.getenv("OPENAI_WHISPER_MODEL") or "gpt-4o-transcribe"
+    os.getenv("OPENAI_TRANSCRIBE_MODEL") or os.getenv("OPENAI_WHISPER_MODEL") or "whisper-1"
 ).strip()
 RECORDED_TRANSCRIBE_PROMPT = os.getenv(
     "OPENAI_TRANSCRIBE_PROMPT",
@@ -363,6 +363,7 @@ keyboard_listener: pynput_keyboard.Listener | None = None
 keyboard_listener_lock = threading.Lock()
 input_listener_watchdog_thread: threading.Thread | None = None
 input_listener_watchdog_stop = threading.Event()
+INPUT_LISTENER_BOOT_REBIND_DELAYS_S = (8.0, 30.0, 90.0)
 tray_icon: TrayIconLike | None = None
 tray_animation_thread: threading.Thread | None = None
 tray_icon_key: tuple[tuple[int, int, int, int], int | None] | None = None
@@ -977,7 +978,46 @@ def stop_keyboard_listener() -> None:
             keyboard_listener = None
 
 
+def clear_pressed_key_state() -> None:
+    with state.lock:
+        state.pressed_keys.clear()
+        state.shift_keys_down.clear()
+
+
+def restart_keyboard_listener(reason: str) -> None:
+    global keyboard_listener
+    with keyboard_listener_lock:
+        if keyboard_listener is not None:
+            try:
+                keyboard_listener.stop()
+            except Exception as exc:  # pylint: disable=broad-except
+                log(f"[Input] Keyboard listener stop failed during {reason}:", exc)
+            keyboard_listener = None
+        clear_pressed_key_state()
+        keyboard_listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
+        keyboard_listener.start()
+    log(f"[Input] Keyboard listener rebound ({reason}).")
+
+
+def should_defer_listener_rebind() -> bool:
+    with state.lock:
+        return bool(state.is_listening or state.session_start_pending)
+
+
+def maybe_rebind_keyboard_listener(reason: str) -> None:
+    if should_defer_listener_rebind():
+        return
+    restart_keyboard_listener(reason)
+
+
 def input_listener_watchdog_loop() -> None:
+    for delay_s in INPUT_LISTENER_BOOT_REBIND_DELAYS_S:
+        if shutdown_event.is_set() or input_listener_watchdog_stop.wait(delay_s):
+            return
+        try:
+            maybe_rebind_keyboard_listener("startup")
+        except Exception as exc:  # pylint: disable=broad-except
+            log("[Input] Startup keyboard listener rebind failed:", exc)
     while not shutdown_event.is_set() and not input_listener_watchdog_stop.wait(5.0):
         try:
             start_keyboard_listener()
@@ -2188,6 +2228,22 @@ def start_worklog_after_hold(press_token: int) -> None:
     )
 
 
+def dictation_press_matches(
+    key_name: str,
+    dictation_tokens: set[str],
+) -> tuple[bool, bool]:
+    if not dictation_tokens:
+        return False, False
+    if len(dictation_tokens) == 1 and key_name in dictation_tokens:
+        shift_active = "SHIFT" in state.shift_keys_down or "SHIFT" in state.pressed_keys
+        return not shift_active, "SHIFT" not in dictation_tokens and shift_active
+    pressed_matches_dictation = state.pressed_keys == dictation_tokens
+    pressed_matches_shift_dictation = "SHIFT" not in dictation_tokens and state.pressed_keys == (
+        dictation_tokens | {"SHIFT"}
+    )
+    return pressed_matches_dictation, pressed_matches_shift_dictation
+
+
 def on_press(key):
     key_name = get_key_name(key)
     if not key_name:
@@ -2219,9 +2275,9 @@ def on_press(key):
         if state.session_start_pending:
             return
         dictation_tokens = set(state.dictation_hotkey_tokens)
-        pressed_matches_dictation = state.pressed_keys == dictation_tokens
-        pressed_matches_shift_dictation = (
-            "SHIFT" not in dictation_tokens and state.pressed_keys == (dictation_tokens | {"SHIFT"})
+        pressed_matches_dictation, pressed_matches_shift_dictation = dictation_press_matches(
+            key_name,
+            dictation_tokens,
         )
         if (
             state.dictation_hotkey_kind == HOTKEY_KIND_KEYBOARD

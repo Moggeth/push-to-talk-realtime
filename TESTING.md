@@ -57,7 +57,7 @@ CI now runs:
   - Clipboard paste flow, work-log append behavior, and tray status updates.
   - Keyboard and mouse hotkey press/release transitions, double-tap work-log handling, and toggle mode stop behavior.
   - First-press startup race handling: a release that arrives while a session is still starting is remembered and stops the new recording cleanly.
-  - Persisted dictation hotkey kind/tokens, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, menu builders, tray startup/shutdown, and `main()` bootstrap wiring.
+  - Persisted dictation hotkey kind/tokens, conservative Whisper recorded-model default, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, menu builders, tray startup/shutdown, and `main()` bootstrap wiring.
   - Single-instance startup guard, hotkey-listener watchdog restart, and delayed restart helper behavior.
 
 - `test_apply_punctuation_options_normalize_capitalize_terminal`
@@ -145,6 +145,7 @@ CI now runs:
 - While transcription is processing after key release, non-AppIndicator backends update the tray icon.
 - On Ubuntu/AppIndicator, the tray icon stays static for stability and the status change is written to `push_to_talk_realtime.log`.
 - Immediately after launch, do one short hold/release. Expected: the release is honored even if the audio session is still starting.
+- After a fresh Windows login, wait at least 90 seconds and then press F13 once. Expected: the service has rebound the listener after startup and dictation begins without manually restarting the tray.
 
 3) Set Hotkey dialog
 - Open the tray menu, click `Settings` -> `Set dictation hotkey...`, press a key or combo, confirm the drafted label looks right, then click `Accept`.

@@ -444,6 +444,7 @@ def test_recorded_transcription_model_aliases_and_selector(monkeypatch):
     refresh_calls = []
     monkeypatch.setattr(app, "refresh_tray_menu", lambda: refresh_calls.append("refresh"))
 
+    assert app.SessionState().recorded_transcription_model == "whisper-1"
     assert app.normalize_recorded_transcription_model("whisper") == "whisper-1"
     assert app.normalize_recorded_transcription_model("gpt-4o") == "gpt-4o-transcribe"
 
@@ -533,6 +534,34 @@ def test_start_keyboard_listener_replaces_dead_listener(monkeypatch):
 
     assert isinstance(app.keyboard_listener, FakeListener)
     assert events == ["log", "start"]
+
+
+def test_keyboard_listener_rebind_clears_stale_key_state(monkeypatch):
+    events = []
+
+    class FakeListener:
+        def __init__(self, on_press, on_release):
+            self.on_press = on_press
+            self.on_release = on_release
+
+        def start(self):
+            events.append("start")
+
+        def stop(self):
+            events.append("stop")
+
+    app.keyboard_listener = FakeListener(app.on_press, app.on_release)
+    app.state.pressed_keys.update({"CTRL", "F13"})
+    app.state.shift_keys_down.add("SHIFT")
+    monkeypatch.setattr(app.pynput_keyboard, "Listener", FakeListener)
+    monkeypatch.setattr(app, "log", lambda *args: events.append("log"))
+
+    app.restart_keyboard_listener("test")
+
+    assert isinstance(app.keyboard_listener, FakeListener)
+    assert app.state.pressed_keys == set()
+    assert app.state.shift_keys_down == set()
+    assert events == ["stop", "start", "log"]
 
 
 def test_start_and_stop_input_listeners_run_keyboard_only(monkeypatch):
@@ -686,8 +715,8 @@ def test_update_tray_tooltip_includes_status_mode_device_and_muted_warning():
 
     app.update_tray_tooltip()
 
-    assert app.tray_icon.title == (
-        f"{app.TRAY_TITLE} - Listening (Worklog, USB Mic, GPT-4o Transcribe, Muted?)"
+    assert (
+        app.tray_icon.title == f"{app.TRAY_TITLE} - Listening (Worklog, USB Mic, Whisper, Muted?)"
     )
 
 
@@ -935,6 +964,16 @@ def test_on_press_dictation_starts_worker_thread(monkeypatch):
     )
     assert created.daemon is True
     assert created.started is True
+
+
+def test_on_press_single_key_dictation_ignores_stale_unrelated_keys(monkeypatch):
+    monkeypatch.setattr(app.threading, "Thread", FakeThread)
+    app.state.pressed_keys.add("CTRL")
+
+    app.on_press(make_dictation_key())
+
+    assert len(FakeThread.created) == 1
+    assert FakeThread.created[0].target is app.start_listening
 
 
 def test_on_press_shift_dictation_uses_system_audio_device(monkeypatch):
@@ -1230,7 +1269,7 @@ def test_tray_setup_marks_icon_visible_and_starts_listener(monkeypatch):
     assert logs == [
         (
             f"Push-to-talk ready. {app.HOTKEY_DICTATION} for dictation/paste, "
-            f"{app.HOTKEY_WORKLOG} for work log. Engine: GPT-4o Transcribe."
+            f"{app.HOTKEY_WORKLOG} for work log. Engine: Whisper."
         ),
         (
             f"[Tray] Backend {app.pystray.Icon.__module__}; runtime updates:"

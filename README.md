@@ -51,9 +51,9 @@ Tray Menu
 Settings includes:
 - Set dictation hotkey...: opens a small capture window, shows the drafted key combo, then saves it only after you click `Accept`.
 - Recorded model:
-  - GPT-4o Transcribe: default quality/latency trade-off for the record-then-paste path.
+  - Whisper: default recorded model for the original conservative boot-time behavior.
+  - GPT-4o Transcribe: optional quality/latency trade-off for the record-then-paste path.
   - GPT-4o Mini Transcribe: usually fastest recorded model.
-  - Whisper: legacy fallback for the original behavior.
 - Transcription mode:
   - Record then paste: transcribes after key release and preserves the original clipboard/paste workflow.
   - GPT-4o Realtime: strict server-side websocket transcription with server VAD; streams deltas while recording, then finalizes on release.
