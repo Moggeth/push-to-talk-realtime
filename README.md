@@ -208,6 +208,12 @@ Notes and tips
 --------------
 - Paste uses the standard shortcut for your platform: `Ctrl+V` on Windows/Linux
   and `Cmd+V` on macOS.
+- On Windows, record-then-paste remembers the focused control when dictation
+  starts. For standard edit controls it inserts the final transcript into that
+  remembered control even if another app is foreground later. If the remembered
+  target cannot accept direct insertion and the foreground window has changed,
+  the transcript stays on the clipboard instead of sending `Ctrl+V` to the wrong
+  app.
 - If you bind a mouse button through Logitech/G Hub, Razer Synapse, X-Mouse, or similar software, prefer `F13`-`F24`; those keys are usually unused by other apps.
 - System audio capture depends on a loopback-capable input device. On many Windows systems that is exposed as `Stereo Mix`; if yours uses a different name, set `SYSTEM_AUDIO_DEVICE`.
 - On Linux, paste injection does not require the root-only `keyboard` package.

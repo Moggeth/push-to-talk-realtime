@@ -39,7 +39,13 @@ from pynput import keyboard as pynput_keyboard
 
 import desktop_bootstrap  # noqa: F401
 from history_store import append_history_entry as append_history_entry_core
-from platform_input import send_paste_shortcut
+from platform_input import (
+    PasteTarget,
+    capture_paste_target,
+    foreground_matches_paste_target,
+    send_paste_shortcut,
+    try_insert_text_into_target,
+)
 from startup_integration import (
     StartupContext,
 )
@@ -829,12 +835,19 @@ def enforce_transcription_engine_dependencies() -> None:
             state.transcription_engine = TRANSCRIPTION_ENGINE_WHISPER
 
 
-def paste_text(text: str):
-    """Paste text into the active control using clipboard + platform paste chord."""
+def paste_text(text: str, target: PasteTarget | None = None):
+    """Paste text into the remembered control when possible, then fall back safely."""
     prepared = prepare_clipboard_text(text)
     if not prepared or not prepared.strip():
         return False
     pyperclip.copy(prepared)
+    if target is not None and try_insert_text_into_target(prepared, target):
+        log("[Pasted] Inserted transcript into remembered target.")
+        return True
+    if target is not None and IS_WINDOWS and not foreground_matches_paste_target(target):
+        log("[Paste] Remembered target unavailable and foreground changed; skipped active-window paste.")
+        log("[Paste] Clipboard still contains the transcript.")
+        return False
     time.sleep(0.02)
     try:
         send_paste_shortcut()
@@ -1880,6 +1893,12 @@ def start_listening(
             state.pending_start_stop_requested = False
         return
     enforce_transcription_engine_dependencies()
+    paste_target = capture_paste_target() if mode == MODE_DICTATION else None
+    if paste_target is not None:
+        log(
+            "[Paste] Remembered target "
+            f"hwnd={paste_target.focus_hwnd} class={paste_target.focus_class_name!r}."
+        )
 
     label_text = device_label or DEFAULT_DEVICE_LABEL
     record_buffer: list[np.ndarray] = []
@@ -2170,8 +2189,8 @@ def start_listening(
                             "[Realtime] Live text changed too much to auto-correct; skipped final paste to avoid duplicates."
                         )
                     elif not live_applied:
-                        if paste_text(final_text):
-                            log("[Pasted] Sent clipboard text to the active window.")
+                        if paste_text(final_text, paste_target):
+                            log("[Pasted] Transcript output completed.")
                         else:
                             log("[Clipboard] Transcript copied, but paste was not sent.")
         else:

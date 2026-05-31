@@ -299,6 +299,54 @@ def test_paste_text_copies_prepared_text_and_sends_shortcut(monkeypatch):
     assert paste_calls == ["sent"]
 
 
+def test_paste_text_uses_remembered_target_before_shortcut(monkeypatch):
+    copied = []
+    shortcut_calls = []
+    target = app.PasteTarget(
+        system_name="Windows",
+        foreground_hwnd=100,
+        focus_hwnd=200,
+        focus_class_name="Edit",
+        thread_id=1,
+        process_id=2,
+    )
+    monkeypatch.setattr(app, "prepare_clipboard_text", lambda text: f"{text} ")
+    monkeypatch.setattr(app.pyperclip, "copy", copied.append)
+    monkeypatch.setattr(app, "try_insert_text_into_target", lambda text, paste_target: True)
+    monkeypatch.setattr(app, "send_paste_shortcut", lambda: shortcut_calls.append("sent"))
+
+    result = app.paste_text("Hello", target)
+
+    assert result is True
+    assert copied == ["Hello "]
+    assert shortcut_calls == []
+
+
+def test_paste_text_skips_active_paste_when_windows_foreground_changed(monkeypatch):
+    copied = []
+    shortcut_calls = []
+    target = app.PasteTarget(
+        system_name="Windows",
+        foreground_hwnd=100,
+        focus_hwnd=200,
+        focus_class_name="Edit",
+        thread_id=1,
+        process_id=2,
+    )
+    monkeypatch.setattr(app, "IS_WINDOWS", True)
+    monkeypatch.setattr(app, "prepare_clipboard_text", lambda text: text)
+    monkeypatch.setattr(app.pyperclip, "copy", copied.append)
+    monkeypatch.setattr(app, "try_insert_text_into_target", lambda text, paste_target: False)
+    monkeypatch.setattr(app, "foreground_matches_paste_target", lambda paste_target: False)
+    monkeypatch.setattr(app, "send_paste_shortcut", lambda: shortcut_calls.append("sent"))
+
+    result = app.paste_text("Hello", target)
+
+    assert result is False
+    assert copied == ["Hello"]
+    assert shortcut_calls == []
+
+
 def test_paste_text_returns_false_for_blank_prepared_text(monkeypatch):
     copied = []
     monkeypatch.setattr(app, "prepare_clipboard_text", lambda _text: "   ")
