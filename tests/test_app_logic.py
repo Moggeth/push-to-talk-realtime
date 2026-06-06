@@ -299,39 +299,7 @@ def test_paste_text_copies_prepared_text_and_sends_shortcut(monkeypatch):
     assert paste_calls == ["sent"]
 
 
-def test_paste_text_uses_shortcut_when_remembered_target_still_foreground(monkeypatch):
-    copied = []
-    shortcut_calls = []
-    insert_calls = []
-    target = app.PasteTarget(
-        system_name="Windows",
-        foreground_hwnd=100,
-        focus_hwnd=200,
-        focus_class_name="Edit",
-        thread_id=1,
-        process_id=2,
-    )
-    monkeypatch.setattr(app, "IS_WINDOWS", True)
-    monkeypatch.setattr(app, "prepare_clipboard_text", lambda text: f"{text} ")
-    monkeypatch.setattr(app.pyperclip, "copy", copied.append)
-    monkeypatch.setattr(app, "foreground_matches_paste_target", lambda paste_target: True)
-    monkeypatch.setattr(
-        app,
-        "try_insert_text_into_target",
-        lambda text, paste_target: insert_calls.append((text, paste_target)) or True,
-    )
-    monkeypatch.setattr(app.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(app, "send_paste_shortcut", lambda: shortcut_calls.append("sent"))
-
-    result = app.paste_text("Hello", target)
-
-    assert result is True
-    assert copied == ["Hello "]
-    assert insert_calls == []
-    assert shortcut_calls == ["sent"]
-
-
-def test_paste_text_uses_remembered_target_after_foreground_changes(monkeypatch):
+def test_paste_text_uses_remembered_target_before_shortcut(monkeypatch):
     copied = []
     shortcut_calls = []
     target = app.PasteTarget(
@@ -342,10 +310,8 @@ def test_paste_text_uses_remembered_target_after_foreground_changes(monkeypatch)
         thread_id=1,
         process_id=2,
     )
-    monkeypatch.setattr(app, "IS_WINDOWS", True)
     monkeypatch.setattr(app, "prepare_clipboard_text", lambda text: f"{text} ")
     monkeypatch.setattr(app.pyperclip, "copy", copied.append)
-    monkeypatch.setattr(app, "foreground_matches_paste_target", lambda paste_target: False)
     monkeypatch.setattr(app, "try_insert_text_into_target", lambda text, paste_target: True)
     monkeypatch.setattr(app, "send_paste_shortcut", lambda: shortcut_calls.append("sent"))
 

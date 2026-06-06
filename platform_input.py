@@ -125,9 +125,7 @@ def _try_insert_text_into_windows_target(text: str, target: PasteTarget) -> bool
         wintypes.LPCWSTR,
         wintypes.UINT,
         wintypes.UINT,
-        ctypes.POINTER(
-            ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
-        ),
+        ctypes.POINTER(ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong),
     ]
     user32.SendMessageTimeoutW.restype = wintypes.LPARAM
     hwnd = wintypes.HWND(target.focus_hwnd)

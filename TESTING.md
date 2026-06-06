@@ -175,12 +175,6 @@ CI now runs:
 - If the target app does not accept simulated paste, expected fallback: the app
   logs that the transcript stayed on the clipboard instead of crashing.
 
-7a) Windows placeholder paste path
-- Focus an empty message box that displays placeholder text such as "Type your message here".
-- Hold F13, dictate a short phrase, then release while the same window remains foreground.
-- Expected: only the dictated phrase appears as editable text. The placeholder text is not inserted before the transcript.
-- Expected: if another app becomes foreground before transcription completes, the app uses remembered-target direct insertion for standard edit controls or leaves the transcript on the clipboard instead of sending `Ctrl+V` to the wrong app.
-
 8) Multi-sentence spacing (your request)
 - Hold F13, speak 3-5 sentences with clear full stops, release.
 - Expected: the pasted text has normal spacing between sentences, and only a

@@ -841,18 +841,13 @@ def paste_text(text: str, target: PasteTarget | None = None):
     if not prepared or not prepared.strip():
         return False
     pyperclip.copy(prepared)
-    if target is not None and IS_WINDOWS:
-        if not foreground_matches_paste_target(target):
-            if try_insert_text_into_target(prepared, target):
-                log("[Pasted] Inserted transcript into remembered target.")
-                return True
-            log(
-                "[Paste] Remembered target unavailable and foreground changed; "
-                "skipped active-window paste."
-            )
-            log("[Paste] Clipboard still contains the transcript.")
-            return False
-        log("[Paste] Remembered target is still foreground; using standard paste shortcut.")
+    if target is not None and try_insert_text_into_target(prepared, target):
+        log("[Pasted] Inserted transcript into remembered target.")
+        return True
+    if target is not None and IS_WINDOWS and not foreground_matches_paste_target(target):
+        log("[Paste] Remembered target unavailable and foreground changed; skipped active-window paste.")
+        log("[Paste] Clipboard still contains the transcript.")
+        return False
     time.sleep(0.02)
     try:
         send_paste_shortcut()
