@@ -318,6 +318,7 @@ class SessionState:
     session_start_pending: bool = False
     pending_start_hotkey_kind: str = ""
     pending_start_hotkey_tokens: tuple[str, ...] = ()
+    pending_start_stop_hotkey_tokens: tuple[str, ...] = ()
     pending_start_stop_requested: bool = False
     should_stop: bool = False
     transcript_final: str = ""
@@ -327,6 +328,7 @@ class SessionState:
     active_hotkey: str = ""
     active_hotkey_kind: str = ""
     active_hotkey_tokens: tuple[str, ...] = ()
+    active_stop_hotkey_tokens: tuple[str, ...] = ()
     active_device_label: str = ""
     active_audio_source: str = AUDIO_SOURCE_MICROPHONE
     dictation_hotkey_kind: str = HOTKEY_KIND_KEYBOARD
@@ -2005,6 +2007,20 @@ def transcribe_audio(chunks: list, engine: str, recorded_model: str | None = Non
 # -------------------- Orchestration --------------------
 
 
+def session_stop_hotkey_tokens(
+    mode: str,
+    hotkey_tokens: tuple[str, ...],
+    dictation_hotkey_tokens: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
+    dictation_tokens = dictation_hotkey_tokens
+    if dictation_tokens is None:
+        with state.lock:
+            dictation_tokens = state.dictation_hotkey_tokens
+    if mode == MODE_DICTATION and "SHIFT" in hotkey_tokens and "SHIFT" not in dictation_tokens:
+        return tuple(token for token in hotkey_tokens if token != "SHIFT")
+    return hotkey_tokens
+
+
 def begin_session_start(
     mode: str,
     hotkey_name: str,
@@ -2013,12 +2029,14 @@ def begin_session_start(
     device_index: int | None,
     device_label: str,
 ) -> bool:
+    stop_hotkey_tokens = session_stop_hotkey_tokens(mode, hotkey_tokens)
     with state.lock:
         if state.is_listening or state.session_start_pending:
             return False
         state.session_start_pending = True
         state.pending_start_hotkey_kind = hotkey_kind
         state.pending_start_hotkey_tokens = hotkey_tokens
+        state.pending_start_stop_hotkey_tokens = stop_hotkey_tokens
         state.pending_start_stop_requested = False
     try:
         threading.Thread(
@@ -2031,6 +2049,7 @@ def begin_session_start(
             state.session_start_pending = False
             state.pending_start_hotkey_kind = ""
             state.pending_start_hotkey_tokens = ()
+            state.pending_start_stop_hotkey_tokens = ()
             state.pending_start_stop_requested = False
         raise
     return True
@@ -2050,6 +2069,7 @@ def start_listening(
             state.session_start_pending = False
             state.pending_start_hotkey_kind = ""
             state.pending_start_hotkey_tokens = ()
+            state.pending_start_stop_hotkey_tokens = ()
             state.pending_start_stop_requested = False
         return
     enforce_transcription_engine_dependencies()
@@ -2069,8 +2089,14 @@ def start_listening(
             state.session_start_pending = False
             state.pending_start_hotkey_kind = ""
             state.pending_start_hotkey_tokens = ()
+            state.pending_start_stop_hotkey_tokens = ()
             state.pending_start_stop_requested = False
             return
+        stop_hotkey_tokens = session_stop_hotkey_tokens(
+            mode,
+            hotkey_tokens,
+            state.dictation_hotkey_tokens,
+        )
         stop_requested_during_start = (
             state.pending_start_hotkey_kind == hotkey_kind
             and state.pending_start_hotkey_tokens == hotkey_tokens
@@ -2082,6 +2108,7 @@ def start_listening(
         state.session_start_pending = False
         state.pending_start_hotkey_kind = ""
         state.pending_start_hotkey_tokens = ()
+        state.pending_start_stop_hotkey_tokens = ()
         state.pending_start_stop_requested = False
         state.is_listening = True
         state.is_transcribing = False
@@ -2094,6 +2121,7 @@ def start_listening(
         state.active_hotkey = hotkey_name
         state.active_hotkey_kind = hotkey_kind
         state.active_hotkey_tokens = hotkey_tokens
+        state.active_stop_hotkey_tokens = stop_hotkey_tokens
         state.active_device_label = label_text
         if (
             mode == MODE_DICTATION
@@ -2195,6 +2223,7 @@ def start_listening(
                 state.active_hotkey = ""
                 state.active_hotkey_kind = ""
                 state.active_hotkey_tokens = ()
+                state.active_stop_hotkey_tokens = ()
                 state.active_device_label = ""
                 state.active_audio_source = AUDIO_SOURCE_MICROPHONE
                 state.should_stop = False
@@ -2245,6 +2274,7 @@ def start_listening(
             state.active_hotkey = ""
             state.active_hotkey_kind = ""
             state.active_hotkey_tokens = ()
+            state.active_stop_hotkey_tokens = ()
             state.active_device_label = ""
             state.active_audio_source = AUDIO_SOURCE_MICROPHONE
             state.should_stop = False
@@ -2461,8 +2491,8 @@ def on_press(key):
             if (
                 state.toggle_mode_enabled
                 and state.active_hotkey_kind == HOTKEY_KIND_KEYBOARD
-                and key_name in state.active_hotkey_tokens
-                and state.pressed_keys == set(state.active_hotkey_tokens)
+                and key_name in state.active_stop_hotkey_tokens
+                and state.pressed_keys == set(state.active_stop_hotkey_tokens)
             ):
                 state.should_stop = True
             return
@@ -2574,13 +2604,13 @@ def on_release(key):
         if (
             state.session_start_pending
             and state.pending_start_hotkey_kind == HOTKEY_KIND_KEYBOARD
-            and key_name in state.pending_start_hotkey_tokens
+            and key_name in state.pending_start_stop_hotkey_tokens
         ):
             state.pending_start_stop_requested = True
         if (
             state.is_listening
             and state.active_hotkey_kind == HOTKEY_KIND_KEYBOARD
-            and key_name in state.active_hotkey_tokens
+            and key_name in state.active_stop_hotkey_tokens
         ):
             state.should_stop = True
         state.pressed_keys.discard(key_name)

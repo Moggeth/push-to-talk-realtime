@@ -34,6 +34,7 @@ Hotkeys
 -------
 - Dictation: `F13` by default, intended for a mouse button remapped to F13.
 - System audio dictation: hold `Shift + F13` to capture the currently playing system output on Windows; if output loopback is unavailable, it falls back to a Stereo Mix-style input when available.
+- System audio source latches at recording start: after starting with `Shift + F13`, releasing `Shift` keeps recording system audio until `F13` is released.
 - Work log: `F14` by default
 - Work log: hold `F14` (more than ~0.25s) to record, or double-tap `F14` to open `work_log.txt`.
 - `Set Hotkey...` captures the exact drafted key or key combo and asks you to accept it before saving.

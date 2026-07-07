@@ -38,12 +38,14 @@ class HotkeySessionStartTests(unittest.TestCase):
             push_to_talk.state.session_start_pending = False
             push_to_talk.state.pending_start_hotkey_kind = ""
             push_to_talk.state.pending_start_hotkey_tokens = ()
+            push_to_talk.state.pending_start_stop_hotkey_tokens = ()
             push_to_talk.state.pending_start_stop_requested = False
             push_to_talk.state.should_stop = False
             push_to_talk.state.toggle_mode_enabled = False
             push_to_talk.state.active_hotkey = ""
             push_to_talk.state.active_hotkey_kind = ""
             push_to_talk.state.active_hotkey_tokens = ()
+            push_to_talk.state.active_stop_hotkey_tokens = ()
             push_to_talk.state.dictation_hotkey_kind = push_to_talk.HOTKEY_KIND_KEYBOARD
             push_to_talk.state.dictation_hotkey_tokens = (push_to_talk.DEFAULT_HOTKEY_DICTATION,)
             push_to_talk.state.dictation_hotkey_label = push_to_talk.format_hotkey_tokens(
@@ -69,6 +71,7 @@ class HotkeySessionStartTests(unittest.TestCase):
             push_to_talk.state.session_start_pending = False
             push_to_talk.state.pending_start_hotkey_kind = ""
             push_to_talk.state.pending_start_hotkey_tokens = ()
+            push_to_talk.state.pending_start_stop_hotkey_tokens = ()
             push_to_talk.state.pending_start_stop_requested = False
             push_to_talk.state.should_stop = False
 
@@ -94,6 +97,14 @@ class HotkeySessionStartTests(unittest.TestCase):
         with push_to_talk.state.lock:
             self.assertTrue(push_to_talk.state.session_start_pending)
             self.assertTrue(push_to_talk.state.pending_start_stop_requested)
+
+    def test_shift_modified_dictation_stops_on_dictation_key_only(self) -> None:
+        key_tokens = ("SHIFT", *push_to_talk.state.dictation_hotkey_tokens)
+
+        self.assertEqual(
+            push_to_talk.state.dictation_hotkey_tokens,
+            push_to_talk.session_stop_hotkey_tokens(push_to_talk.MODE_DICTATION, key_tokens),
+        )
 
     def test_start_listening_honors_release_that_arrived_during_start(self) -> None:
         push_to_talk.OPENAI_API_KEY = "test-key"

@@ -1220,6 +1220,7 @@ def test_on_press_in_toggle_mode_stops_active_session(monkeypatch):
         app.state.active_hotkey = app.HOTKEY_DICTATION
         app.state.active_hotkey_kind = app.HOTKEY_KIND_KEYBOARD
         app.state.active_hotkey_tokens = app.state.dictation_hotkey_tokens
+        app.state.active_stop_hotkey_tokens = app.state.dictation_hotkey_tokens
 
     app.on_press(make_dictation_key())
 
@@ -1260,6 +1261,70 @@ def test_on_release_sets_should_stop_for_matching_hotkey():
         app.state.active_hotkey = app.HOTKEY_DICTATION
         app.state.active_hotkey_kind = app.HOTKEY_KIND_KEYBOARD
         app.state.active_hotkey_tokens = app.state.dictation_hotkey_tokens
+        app.state.active_stop_hotkey_tokens = app.state.dictation_hotkey_tokens
+
+    app.on_release(make_dictation_key())
+
+    assert app.state.should_stop is True
+
+
+def test_on_release_shift_does_not_stop_pending_system_audio_session():
+    with app.state.lock:
+        app.state.session_start_pending = True
+        app.state.pending_start_hotkey_kind = app.HOTKEY_KIND_KEYBOARD
+        app.state.pending_start_hotkey_tokens = ("SHIFT", *app.state.dictation_hotkey_tokens)
+        app.state.pending_start_stop_hotkey_tokens = app.state.dictation_hotkey_tokens
+        app.state.pressed_keys.update({"SHIFT", *app.state.dictation_hotkey_tokens})
+        app.state.shift_keys_down.add("SHIFT")
+
+    app.on_release(make_key("SHIFT"))
+
+    assert app.state.pending_start_stop_requested is False
+    assert app.state.shift_keys_down == set()
+    assert app.state.pressed_keys == set(app.state.dictation_hotkey_tokens)
+
+
+def test_on_release_dictation_key_stops_pending_system_audio_session():
+    with app.state.lock:
+        app.state.session_start_pending = True
+        app.state.pending_start_hotkey_kind = app.HOTKEY_KIND_KEYBOARD
+        app.state.pending_start_hotkey_tokens = ("SHIFT", *app.state.dictation_hotkey_tokens)
+        app.state.pending_start_stop_hotkey_tokens = app.state.dictation_hotkey_tokens
+        app.state.pressed_keys.update(app.state.dictation_hotkey_tokens)
+
+    app.on_release(make_dictation_key())
+
+    assert app.state.pending_start_stop_requested is True
+
+
+def test_on_release_shift_does_not_stop_latched_system_audio_session():
+    with app.state.lock:
+        app.state.is_listening = True
+        app.state.active_hotkey = app.HOTKEY_DICTATION
+        app.state.active_hotkey_kind = app.HOTKEY_KIND_KEYBOARD
+        app.state.active_hotkey_tokens = ("SHIFT", *app.state.dictation_hotkey_tokens)
+        app.state.active_stop_hotkey_tokens = app.state.dictation_hotkey_tokens
+        app.state.active_audio_source = app.AUDIO_SOURCE_SYSTEM
+        app.state.pressed_keys.update({"SHIFT", *app.state.dictation_hotkey_tokens})
+        app.state.shift_keys_down.add("SHIFT")
+
+    app.on_release(make_key("SHIFT"))
+
+    assert app.state.should_stop is False
+    assert app.state.active_audio_source == app.AUDIO_SOURCE_SYSTEM
+    assert app.state.shift_keys_down == set()
+    assert app.state.pressed_keys == set(app.state.dictation_hotkey_tokens)
+
+
+def test_on_release_dictation_key_stops_latched_system_audio_session():
+    with app.state.lock:
+        app.state.is_listening = True
+        app.state.active_hotkey = app.HOTKEY_DICTATION
+        app.state.active_hotkey_kind = app.HOTKEY_KIND_KEYBOARD
+        app.state.active_hotkey_tokens = ("SHIFT", *app.state.dictation_hotkey_tokens)
+        app.state.active_stop_hotkey_tokens = app.state.dictation_hotkey_tokens
+        app.state.active_audio_source = app.AUDIO_SOURCE_SYSTEM
+        app.state.pressed_keys.update(app.state.dictation_hotkey_tokens)
 
     app.on_release(make_dictation_key())
 

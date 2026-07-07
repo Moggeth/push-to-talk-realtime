@@ -168,6 +168,7 @@ CI now runs:
 - Hold `Shift + F13` while the audio is playing, then release.
 - Expected: on Windows, the app captures the active system output loopback instead of the microphone and transcribes that audio on release.
 - Expected: on non-AppIndicator tray backends, the tray icon is blue while system audio is recording instead of the normal red microphone recording color.
+- Expected: if `Shift` is released before `F13`, the icon stays blue and system-audio recording continues until `F13` is released.
 - If the default output is not the target, set `SYSTEM_AUDIO_DEVICE` to a speakers/headphones name fragment. If loopback is unavailable, set it to a Stereo Mix-style input name or index.
 
 7) Linux non-root paste path
