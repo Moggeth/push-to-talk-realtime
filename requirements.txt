@@ -6,4 +6,5 @@ pyperclip
 pystray
 python-dotenv
 sounddevice
+soundcard
 websockets

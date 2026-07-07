@@ -1206,12 +1206,54 @@ def log_device_selection(role: str, index: int | None, label: str) -> None:
     log(f"[Audio] {role} device -> {label} (index={index_text})")
 
 
+def import_soundcard_backend():
+    try:
+        import soundcard as sc
+    except Exception:  # pylint: disable=broad-except
+        return None
+    return sc
+
+
+def system_audio_loopback_label(speaker: Any) -> str:
+    name = getattr(speaker, "name", "") or str(speaker)
+    return f"System output: {name}"
+
+
+def is_system_audio_loopback_label(label: str) -> bool:
+    return (label or "").startswith("System output:")
+
+
+def find_system_audio_loopback_speaker(descriptor: str = "") -> Any | None:
+    if not IS_WINDOWS:
+        return None
+    sc = import_soundcard_backend()
+    if sc is None:
+        return None
+    descriptor = (descriptor or "").strip().lower()
+    try:
+        if not descriptor:
+            return sc.default_speaker()
+        for speaker in sc.all_speakers():
+            name = str(getattr(speaker, "name", "") or "")
+            speaker_id = str(getattr(speaker, "id", "") or "")
+            haystack = f"{name} {speaker_id}".lower()
+            if descriptor in haystack:
+                return speaker
+    except Exception as exc:  # pylint: disable=broad-except
+        log("[Audio] Unable to inspect system output devices:", exc)
+    return None
+
+
 def system_audio_search_hint() -> str:
-    return SYSTEM_AUDIO_DEVICE or STEREO_MIX_SEARCH
+    return SYSTEM_AUDIO_DEVICE or "default Windows output loopback or Stereo Mix"
 
 
 def resolve_system_audio_input_device() -> tuple[int | None, str, bool]:
     descriptor = SYSTEM_AUDIO_DEVICE
+    speaker = find_system_audio_loopback_speaker(descriptor)
+    if speaker is not None:
+        return None, system_audio_loopback_label(speaker), True
+
     if descriptor:
         idx, label, ok = resolve_device_descriptor(descriptor)
         if ok:
@@ -1309,21 +1351,7 @@ class AudioRecorder:
     def _callback(self, indata, frames, time_info, status):
         if status:
             return
-        pcm = np.clip(indata[:, 0], -1.0, 1.0)
-        rms = float(np.sqrt(np.mean(pcm * pcm))) if pcm.size else 0.0
-        now = time.monotonic()
-        with state.lock:
-            state.last_audio_rms = rms
-            if rms >= MUTE_RMS_THRESHOLD:
-                state.last_audio_time = now
-        pcm_i16 = (pcm * 32767.0).astype(np.int16)
-        with self.buffer_lock:
-            self.buffer.append(pcm_i16.copy())
-        if self.on_chunk is not None:
-            try:
-                self.on_chunk(pcm_i16.copy())
-            except Exception:  # pylint: disable=broad-except
-                return
+        append_float_audio_block(indata, self.buffer, self.buffer_lock, self.on_chunk)
 
     def start(self):
         self.stream = sd.InputStream(
@@ -1345,8 +1373,94 @@ class AudioRecorder:
             self.stream = None
 
 
+def append_float_audio_block(
+    indata,
+    buffer: list,
+    buffer_lock: threading.Lock,
+    on_chunk: Callable[[np.ndarray], None] | None = None,
+) -> None:
+    samples = np.asarray(indata)
+    if samples.size == 0:
+        return
+    mono = samples if samples.ndim == 1 else samples[:, 0]
+    pcm = np.clip(mono.astype(np.float32, copy=False), -1.0, 1.0)
+    rms = float(np.sqrt(np.mean(pcm * pcm))) if pcm.size else 0.0
+    now = time.monotonic()
+    with state.lock:
+        state.last_audio_rms = rms
+        if rms >= MUTE_RMS_THRESHOLD:
+            state.last_audio_time = now
+    pcm_i16 = (pcm * 32767.0).astype(np.int16)
+    with buffer_lock:
+        buffer.append(pcm_i16.copy())
+    if on_chunk is not None:
+        try:
+            on_chunk(pcm_i16.copy())
+        except Exception:  # pylint: disable=broad-except
+            return
+
+
+class SystemAudioLoopbackRecorder:
+    def __init__(
+        self,
+        output_descriptor: str,
+        buffer: list,
+        buffer_lock: threading.Lock,
+        on_chunk: Callable[[np.ndarray], None] | None = None,
+    ):
+        self.output_descriptor = output_descriptor
+        self.buffer = buffer
+        self.buffer_lock = buffer_lock
+        self.on_chunk = on_chunk
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.recorder_context = None
+        self.recorder = None
+        self.active_label = ""
+        self.device_index = None
+
+    def _record_loop(self) -> None:
+        assert self.recorder is not None
+        while not self.stop_event.is_set():
+            try:
+                data = self.recorder.record(numframes=BLOCK_SIZE)
+            except Exception as exc:  # pylint: disable=broad-except
+                log("[Audio] System audio loopback read failed:", exc)
+                break
+            append_float_audio_block(data, self.buffer, self.buffer_lock, self.on_chunk)
+
+    def start(self) -> None:
+        speaker = find_system_audio_loopback_speaker(self.output_descriptor)
+        if speaker is None:
+            raise RuntimeError("Windows system output loopback is unavailable")
+        sc = import_soundcard_backend()
+        if sc is None:
+            raise RuntimeError("soundcard package is not installed")
+        self.active_label = system_audio_loopback_label(speaker)
+        microphone = sc.get_microphone(id=str(speaker.name), include_loopback=True)
+        self.recorder_context = microphone.recorder(samplerate=SAMPLE_RATE, channels=CHANNELS)
+        self.recorder = self.recorder_context.__enter__()
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self._record_loop, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        try:
+            if self.thread is not None:
+                self.thread.join(timeout=1.0)
+        finally:
+            self.thread = None
+            try:
+                if self.recorder_context is not None:
+                    self.recorder_context.__exit__(None, None, None)
+            finally:
+                self.recorder_context = None
+                self.recorder = None
+
+
 def start_recorder_with_fallback(
-    recorder: AudioRecorder,
+    recorder: AudioRecorder | SystemAudioLoopbackRecorder,
     role: str,
     device_label: str,
     retries: int = 2,
@@ -1356,7 +1470,8 @@ def start_recorder_with_fallback(
         index_text = recorder.device_index if recorder.device_index is not None else "default"
         try:
             recorder.start()
-            return True, recorder.device_index, label_text
+            active_label = getattr(recorder, "active_label", "") or label_text
+            return True, recorder.device_index, active_label
         except Exception as exc:  # pylint: disable=broad-except
             log(
                 "[Audio] Unable to start",
@@ -1365,6 +1480,9 @@ def start_recorder_with_fallback(
             if attempt < retries:
                 time.sleep(0.25)
                 refresh_device_list()
+
+    if isinstance(recorder, SystemAudioLoopbackRecorder):
+        return False, recorder.device_index, label_text
 
     fallback_index, fallback_label = pick_fallback_input_device(recorder.device_index)
     fallback_text = fallback_label or DEFAULT_DEVICE_LABEL
@@ -1385,7 +1503,37 @@ def start_recorder_with_fallback(
             f"{role} input ({fallback_text}, index={fallback_index_text}): {exc}",
         )
         return False, fallback_index, fallback_text
-    return True, fallback_index, fallback_text
+    active_label = getattr(recorder, "active_label", "") or fallback_text
+    return True, fallback_index, active_label
+
+
+def build_session_recorder(
+    audio_source: str,
+    device_index: int | None,
+    device_label: str,
+    buffer: list,
+    buffer_lock: threading.Lock,
+    on_chunk: Callable[[np.ndarray], None] | None = None,
+) -> tuple[AudioRecorder | SystemAudioLoopbackRecorder, int]:
+    if audio_source == AUDIO_SOURCE_SYSTEM and is_system_audio_loopback_label(device_label):
+        return (
+            SystemAudioLoopbackRecorder(
+                output_descriptor=SYSTEM_AUDIO_DEVICE,
+                buffer=buffer,
+                buffer_lock=buffer_lock,
+                on_chunk=on_chunk,
+            ),
+            0,
+        )
+    return (
+        AudioRecorder(
+            device_index=device_index,
+            buffer=buffer,
+            buffer_lock=buffer_lock,
+            on_chunk=on_chunk,
+        ),
+        2,
+    )
 
 
 # -------------------- Recorded transcription --------------------
@@ -2018,16 +2166,21 @@ def start_listening(
             except queue.Full:
                 return
 
-    recorder = AudioRecorder(
-        device_index=device_index,
-        buffer=record_buffer,
-        buffer_lock=buffer_lock,
-        on_chunk=on_audio_chunk,
+    with state.lock:
+        audio_source = state.active_audio_source
+    recorder, recorder_retries = build_session_recorder(
+        audio_source,
+        device_index,
+        label_text,
+        record_buffer,
+        buffer_lock,
+        on_audio_chunk,
     )
     started, _active_index, active_label = start_recorder_with_fallback(
         recorder,
         label,
         label_text,
+        retries=recorder_retries,
     )
     if not started:
         if realtime_stop_event is not None:

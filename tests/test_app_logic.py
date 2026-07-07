@@ -736,6 +736,73 @@ def test_resolve_device_descriptor_supports_numeric_and_name(monkeypatch):
     assert app.resolve_device_descriptor("missing") == (None, app.DEFAULT_DEVICE_LABEL, False)
 
 
+def test_resolve_system_audio_prefers_default_windows_output_loopback(monkeypatch):
+    speaker = SimpleNamespace(name="Headphones (WH-1000XM3)", id="speaker-id")
+    fake_soundcard = SimpleNamespace(default_speaker=lambda: speaker)
+    monkeypatch.setattr(app, "IS_WINDOWS", True)
+    monkeypatch.setattr(app, "SYSTEM_AUDIO_DEVICE", "")
+    monkeypatch.setattr(app, "import_soundcard_backend", lambda: fake_soundcard)
+
+    assert app.resolve_system_audio_input_device() == (
+        None,
+        "System output: Headphones (WH-1000XM3)",
+        True,
+    )
+
+
+def test_resolve_system_audio_matches_configured_windows_output(monkeypatch):
+    speakers = [
+        SimpleNamespace(name="Speakers (Yeti Nano)", id="yeti-id"),
+        SimpleNamespace(name="Headphones (WH-1000XM3)", id="sony-id"),
+    ]
+    fake_soundcard = SimpleNamespace(all_speakers=lambda: speakers)
+    monkeypatch.setattr(app, "IS_WINDOWS", True)
+    monkeypatch.setattr(app, "SYSTEM_AUDIO_DEVICE", "wh-1000xm3")
+    monkeypatch.setattr(app, "import_soundcard_backend", lambda: fake_soundcard)
+
+    assert app.resolve_system_audio_input_device() == (
+        None,
+        "System output: Headphones (WH-1000XM3)",
+        True,
+    )
+
+
+def test_resolve_system_audio_falls_back_to_stereo_mix_when_loopback_unavailable(monkeypatch):
+    monkeypatch.setattr(app, "IS_WINDOWS", True)
+    monkeypatch.setattr(app, "SYSTEM_AUDIO_DEVICE", "")
+    monkeypatch.setattr(app, "import_soundcard_backend", lambda: None)
+    monkeypatch.setattr(app, "lookup_input_device_by_name", lambda name: (20, "Stereo Mix"))
+
+    assert app.resolve_system_audio_input_device() == (20, "Stereo Mix", True)
+
+
+def test_build_session_recorder_uses_loopback_for_system_audio_label():
+    recorder, retries = app.build_session_recorder(
+        app.AUDIO_SOURCE_SYSTEM,
+        None,
+        "System output: Headphones",
+        [],
+        threading.Lock(),
+    )
+
+    assert isinstance(recorder, app.SystemAudioLoopbackRecorder)
+    assert retries == 0
+
+
+def test_build_session_recorder_keeps_microphone_path_for_normal_audio():
+    recorder, retries = app.build_session_recorder(
+        app.AUDIO_SOURCE_MICROPHONE,
+        5,
+        "USB Mic",
+        [],
+        threading.Lock(),
+    )
+
+    assert isinstance(recorder, app.AudioRecorder)
+    assert recorder.device_index == 5
+    assert retries == 2
+
+
 def test_set_input_device_updates_both_modes_and_refreshes_menu(monkeypatch):
     refresh_calls = []
     monkeypatch.setattr(app, "refresh_tray_menu", lambda: refresh_calls.append("refresh"))

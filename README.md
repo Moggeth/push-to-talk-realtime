@@ -33,7 +33,7 @@ Features
 Hotkeys
 -------
 - Dictation: `F13` by default, intended for a mouse button remapped to F13.
-- System audio dictation: hold `Shift + F13` to capture the currently playing system audio input (defaults to a Stereo Mix-style device when available).
+- System audio dictation: hold `Shift + F13` to capture the currently playing system output on Windows; if output loopback is unavailable, it falls back to a Stereo Mix-style input when available.
 - Work log: `F14` by default
 - Work log: hold `F14` (more than ~0.25s) to record, or double-tap `F14` to open `work_log.txt`.
 - `Set Hotkey...` captures the exact drafted key or key combo and asks you to accept it before saving.
@@ -184,7 +184,7 @@ Environment variables:
 - `PUSH_TO_TALK_SERVICE_NAME` (optional): service name used by the tray `Restart` / `Quit` actions, default `push-to-talk-realtime.service`.
 - `DICTATION_DEVICE` (optional): device index or name fragment for the shared microphone input.
 - `WORKLOG_DEVICE` (optional): legacy alias for the shared microphone input when `DICTATION_DEVICE` is unset.
-- `SYSTEM_AUDIO_DEVICE` (optional): device index or name fragment used by `Shift + DICTATION_HOTKEY`; if unset, the app searches for `STEREO_MIX_SEARCH`.
+- `SYSTEM_AUDIO_DEVICE` (optional): output device name fragment used by `Shift + DICTATION_HOTKEY` on Windows loopback, or an input device index/name fragment for Stereo Mix fallback; if unset, the app uses the default Windows output loopback first.
 - `WORK_LOG_PATH` (optional): custom path for `work_log.txt`.
 - `PUSH_TO_TALK_HELPER_PYTHON` (optional): override the interpreter used for the hotkey capture helper on Linux.
 - `STEREO_MIX_SEARCH` (optional): name fragment for Stereo Mix device search.
@@ -196,10 +196,11 @@ Device selection
 Use the tray menu to switch input devices on the fly. For scripted setup, set
 `DICTATION_DEVICE` to a device index or a partial name match
 (case-insensitive). `WORKLOG_DEVICE` is kept as a compatibility alias if
-`DICTATION_DEVICE` is unset. `Shift + DICTATION_HOTKEY` uses
-`SYSTEM_AUDIO_DEVICE` when configured, otherwise it searches for the
-`STEREO_MIX_SEARCH` input. The menu also includes a "Refresh audio devices"
-option. If a selected device
+`DICTATION_DEVICE` is unset. On Windows, `Shift + DICTATION_HOTKEY` captures the
+default output device through WASAPI loopback. Set `SYSTEM_AUDIO_DEVICE` to a
+headphones/speakers name fragment to target a specific output, or to a Stereo
+Mix-style input name/index if loopback is unavailable. The menu also includes a
+"Refresh audio devices" option. If a selected device
 disappears (for example, USB unplug/replug), the app retries and falls back to
 another available input instead of crashing. Reselect the desired device after
 it reconnects.
@@ -215,7 +216,7 @@ Notes and tips
   the transcript stays on the clipboard instead of sending `Ctrl+V` to the wrong
   app.
 - If you bind a mouse button through Logitech/G Hub, Razer Synapse, X-Mouse, or similar software, prefer `F13`-`F24`; those keys are usually unused by other apps.
-- System audio capture depends on a loopback-capable input device. On many Windows systems that is exposed as `Stereo Mix`; if yours uses a different name, set `SYSTEM_AUDIO_DEVICE`.
+- System audio capture on Windows uses output loopback when possible, so Bluetooth headphones and other non-Realtek outputs can be captured directly. If loopback is unavailable, use a loopback-capable input such as `Stereo Mix`; if yours uses a different name, set `SYSTEM_AUDIO_DEVICE`.
 - On Linux, paste injection does not require the root-only `keyboard` package.
   If simulated paste fails, the transcript still remains on the clipboard.
 - On Ubuntu GNOME/Wayland, tray clicks and menus rely on the AppIndicator path.
