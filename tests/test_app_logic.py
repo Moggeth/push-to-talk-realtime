@@ -769,6 +769,22 @@ def test_update_tray_tooltip_includes_status_mode_device_and_muted_warning():
     )
 
 
+def test_update_tray_tooltip_identifies_system_audio_source():
+    app.tray_icon = FakeTrayIcon()
+    with app.state.lock:
+        app.state.tooltip_enabled = True
+        app.state.is_listening = True
+        app.state.mode = app.MODE_DICTATION
+        app.state.active_audio_source = app.AUDIO_SOURCE_SYSTEM
+        app.state.active_device_label = "Stereo Mix"
+
+    app.update_tray_tooltip()
+
+    assert app.tray_icon.title == (
+        f"{app.TRAY_TITLE} - Listening (Dictation, System audio, Stereo Mix, Whisper)"
+    )
+
+
 def test_update_tray_tooltip_resets_title_when_disabled():
     app.tray_icon = FakeTrayIcon()
 
@@ -795,6 +811,25 @@ def test_update_tray_icon_uses_listening_color(monkeypatch):
     assert app.tray_icon.icon == "icon"
 
 
+def test_update_tray_icon_uses_system_audio_listening_color(monkeypatch):
+    app.tray_icon = FakeTrayIcon()
+    colors = []
+    monkeypatch.setattr(app, "APPINDICATOR_BACKEND", False)
+    monkeypatch.setattr(
+        app,
+        "create_tray_icon_image",
+        lambda **kwargs: colors.append(kwargs["color"]) or "icon",
+    )
+    with app.state.lock:
+        app.state.is_listening = True
+        app.state.active_audio_source = app.AUDIO_SOURCE_SYSTEM
+
+    app.update_tray_icon()
+
+    assert colors == [app.TRAY_COLOR_SYSTEM_AUDIO_LISTENING]
+    assert app.tray_icon.icon == "icon"
+
+
 def test_update_tray_icon_skips_spinner_on_appindicator(monkeypatch):
     app.tray_icon = FakeTrayIcon()
     monkeypatch.setattr(app, "APPINDICATOR_BACKEND", True)
@@ -806,6 +841,19 @@ def test_update_tray_icon_skips_spinner_on_appindicator(monkeypatch):
 
     assert app.tray_icon.icon is None
     assert app.tray_icon_key == (app.TRAY_COLOR_TRANSCRIBING, None)
+
+
+def test_update_tray_icon_marks_system_audio_on_appindicator(monkeypatch):
+    app.tray_icon = FakeTrayIcon()
+    monkeypatch.setattr(app, "APPINDICATOR_BACKEND", True)
+    with app.state.lock:
+        app.state.is_listening = True
+        app.state.active_audio_source = app.AUDIO_SOURCE_SYSTEM
+
+    app.update_tray_icon()
+
+    assert app.tray_icon.icon is None
+    assert app.tray_icon_key == (app.TRAY_COLOR_SYSTEM_AUDIO_LISTENING, None)
 
 
 def test_update_tray_icon_skips_redundant_redraw(monkeypatch):

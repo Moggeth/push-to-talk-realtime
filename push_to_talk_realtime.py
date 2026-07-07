@@ -165,6 +165,8 @@ DEVICE_INDEX = None  # set to an index from sd.query_devices() if needed
 # Behavior
 MODE_DICTATION = "dictation"
 MODE_WORKLOG = "worklog"
+AUDIO_SOURCE_MICROPHONE = "microphone"
+AUDIO_SOURCE_SYSTEM = "system"
 
 HOTKEY_KIND_KEYBOARD = "keyboard"
 DEFAULT_HOTKEY_DICTATION = "F13"
@@ -273,6 +275,7 @@ TRAY_ICON_SIZE = 64
 TRAY_TITLE = "Push-to-talk Transcription"
 TRAY_COLOR_READY = (46, 160, 67, 255)
 TRAY_COLOR_LISTENING = (220, 53, 69, 255)
+TRAY_COLOR_SYSTEM_AUDIO_LISTENING = (0, 123, 255, 255)
 TRAY_COLOR_TRANSCRIBING = (255, 166, 0, 255)
 TRAY_SPINNER_STEPS = 12
 TRAY_SPINNER_SWEEP_DEG = 90
@@ -325,6 +328,7 @@ class SessionState:
     active_hotkey_kind: str = ""
     active_hotkey_tokens: tuple[str, ...] = ()
     active_device_label: str = ""
+    active_audio_source: str = AUDIO_SOURCE_MICROPHONE
     dictation_hotkey_kind: str = HOTKEY_KIND_KEYBOARD
     dictation_hotkey_label: str = HOTKEY_DICTATION
     dictation_hotkey_tokens: tuple[str, ...] = (HOTKEY_DICTATION,)
@@ -489,7 +493,7 @@ def install_runtime_hooks() -> None:
     threading.excepthook = log_unhandled_thread_exception
 
 
-def current_tray_status_signature() -> tuple[str, str, str, str, bool, bool]:
+def current_tray_status_signature() -> tuple[str, str, str, str, str, bool, bool]:
     with state.lock:
         status = "Ready"
         if state.is_transcribing:
@@ -498,12 +502,14 @@ def current_tray_status_signature() -> tuple[str, str, str, str, bool, bool]:
             status = "Listening"
         mode = "Dictation" if state.mode == MODE_DICTATION else "Worklog"
         device_label = state.active_device_label
+        audio_source = state.active_audio_source
         transcription_engine = transcription_engine_label(state.transcription_engine)
         muted_warning = state.muted_warning
     return (
         status,
         mode,
         device_label,
+        audio_source,
         transcription_engine,
         muted_warning,
         keyboard_listener_is_running(),
@@ -516,8 +522,12 @@ def log_tray_status_change(reason: str = "state change") -> None:
     if signature == tray_status_signature:
         return
     tray_status_signature = signature
-    status, mode, device_label, transcription_engine, muted_warning, hotkey_ready = signature
+    status, mode, device_label, audio_source, transcription_engine, muted_warning, hotkey_ready = (
+        signature
+    )
     details = [mode, transcription_engine]
+    if audio_source == AUDIO_SOURCE_SYSTEM:
+        details.append("system-audio")
     if device_label:
         details.append(device_label)
     if muted_warning:
@@ -845,7 +855,9 @@ def paste_text(text: str, target: PasteTarget | None = None):
         log("[Pasted] Inserted transcript into remembered target.")
         return True
     if target is not None and IS_WINDOWS and not foreground_matches_paste_target(target):
-        log("[Paste] Remembered target unavailable and foreground changed; skipped active-window paste.")
+        log(
+            "[Paste] Remembered target unavailable and foreground changed; skipped active-window paste."
+        )
         log("[Paste] Clipboard still contains the transcript.")
         return False
     time.sleep(0.02)
@@ -1935,6 +1947,14 @@ def start_listening(
         state.active_hotkey_kind = hotkey_kind
         state.active_hotkey_tokens = hotkey_tokens
         state.active_device_label = label_text
+        if (
+            mode == MODE_DICTATION
+            and "SHIFT" in hotkey_tokens
+            and "SHIFT" not in state.dictation_hotkey_tokens
+        ):
+            state.active_audio_source = AUDIO_SOURCE_SYSTEM
+        else:
+            state.active_audio_source = AUDIO_SOURCE_MICROPHONE
     update_tray_status("session started")
 
     with state.lock:
@@ -2023,6 +2043,7 @@ def start_listening(
                 state.active_hotkey_kind = ""
                 state.active_hotkey_tokens = ()
                 state.active_device_label = ""
+                state.active_audio_source = AUDIO_SOURCE_MICROPHONE
                 state.should_stop = False
                 state.muted_warning = False
         update_tray_status("session aborted")
@@ -2072,6 +2093,7 @@ def start_listening(
             state.active_hotkey_kind = ""
             state.active_hotkey_tokens = ()
             state.active_device_label = ""
+            state.active_audio_source = AUDIO_SOURCE_MICROPHONE
             state.should_stop = False
             state.muted_warning = False
     update_tray_status("session ended")
@@ -2444,8 +2466,14 @@ def update_tray_icon() -> None:
         with state.lock:
             is_listening = state.is_listening
             is_transcribing = state.is_transcribing
+            audio_source = state.active_audio_source
         if is_listening:
-            tray_icon_key = (TRAY_COLOR_LISTENING, None)
+            tray_icon_key = (
+                TRAY_COLOR_SYSTEM_AUDIO_LISTENING
+                if audio_source == AUDIO_SOURCE_SYSTEM
+                else TRAY_COLOR_LISTENING,
+                None,
+            )
         elif is_transcribing:
             tray_icon_key = (TRAY_COLOR_TRANSCRIBING, None)
         else:
@@ -2455,8 +2483,13 @@ def update_tray_icon() -> None:
         is_listening = state.is_listening
         is_transcribing = state.is_transcribing
         spinner_step = state.tray_spinner_step
+        audio_source = state.active_audio_source
     if is_listening:
-        color = TRAY_COLOR_LISTENING
+        color = (
+            TRAY_COLOR_SYSTEM_AUDIO_LISTENING
+            if audio_source == AUDIO_SOURCE_SYSTEM
+            else TRAY_COLOR_LISTENING
+        )
     elif is_transcribing:
         color = TRAY_COLOR_TRANSCRIBING
     else:
@@ -2485,6 +2518,7 @@ def update_tray_tooltip() -> None:
         is_transcribing = state.is_transcribing
         mode = state.mode
         device_label = state.active_device_label
+        audio_source = state.active_audio_source
         muted_warning = state.muted_warning
         transcription_engine = state.transcription_engine
         recorded_transcription_model = state.recorded_transcription_model
@@ -2502,6 +2536,8 @@ def update_tray_tooltip() -> None:
     details = []
     if is_listening or is_transcribing:
         details.append("Dictation" if mode == MODE_DICTATION else "Worklog")
+        if is_listening and audio_source == AUDIO_SOURCE_SYSTEM:
+            details.append("System audio")
         if device_label:
             details.append(device_label)
         details.append(

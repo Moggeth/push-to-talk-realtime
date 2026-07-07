@@ -21,7 +21,7 @@ Features
 - Realtime live dictation: GPT-4o Realtime streams server-side transcript deltas while you are still holding the hotkey.
 - Transcription preferences are saved and restored on next launch.
 - Tray controls: `Settings`, `Open transcript history`, `Restart service`, and `Quit`.
-- Busy tray feedback: non-AppIndicator backends update the tray icon live; Ubuntu AppIndicator stays on a static icon for stability and writes status changes to the app log.
+- Busy tray feedback: non-AppIndicator backends update the tray icon live; recording from the microphone is red, system-audio recording is blue, and transcription is orange. Ubuntu AppIndicator stays on a static icon for stability and writes status changes to the app log.
 - Single-instance guard: accidental duplicate launches exit before installing a second global hotkey listener.
 - Startup hardening: the ready message is logged only after the global hotkey listener starts, and a watchdog restarts the listener if it stops unexpectedly.
 - First-press reliability: if the dictation key is released while the audio session is still starting, the release is remembered and applied as soon as recording becomes active.
