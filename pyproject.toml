@@ -16,7 +16,13 @@ pythonpath = ["."]
 
 [tool.coverage.run]
 branch = true
-source = ["push_to_talk_realtime", "platform_input", "text_processing"]
+source = [
+    "push_to_talk_realtime",
+    "platform_input",
+    "text_processing",
+    "transcript_store",
+    "transcript_browser",
+]
 
 [tool.coverage.report]
 fail_under = 70

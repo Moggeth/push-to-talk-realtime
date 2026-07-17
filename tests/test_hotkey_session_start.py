@@ -183,6 +183,7 @@ class HotkeySessionStartTests(unittest.TestCase):
         push_to_talk.OPENAI_API_KEY = "test-key"
         key_tokens = push_to_talk.state.dictation_hotkey_tokens
         pasted = []
+        archive_events = []
         with push_to_talk.state.lock:
             push_to_talk.state.session_start_pending = True
             push_to_talk.state.pending_start_hotkey_kind = push_to_talk.HOTKEY_KIND_KEYBOARD
@@ -201,8 +202,22 @@ class HotkeySessionStartTests(unittest.TestCase):
             patch.object(push_to_talk, "transcribe_audio", return_value="raw transcript"),
             patch.object(
                 push_to_talk,
+                "archive_raw_transcript",
+                side_effect=lambda **kwargs: archive_events.append(("raw", kwargs["raw_text"]))
+                or 1,
+            ),
+            patch.object(
+                push_to_talk,
+                "archive_final_transcript",
+                side_effect=lambda entry_id, **kwargs: archive_events.append(
+                    ("final", entry_id, kwargs["final_text"], kwargs["post_process_status"])
+                ),
+            ),
+            patch.object(
+                push_to_talk,
                 "post_process_transcript",
-                side_effect=RuntimeError("temporary API failure"),
+                side_effect=lambda text, *_args: archive_events.append(("post", text))
+                or (_ for _ in ()).throw(RuntimeError("temporary API failure")),
             ),
             patch.object(
                 push_to_talk,
@@ -222,6 +237,14 @@ class HotkeySessionStartTests(unittest.TestCase):
             )
 
         self.assertEqual(["raw transcript."], pasted)
+        self.assertEqual(
+            [
+                ("raw", "raw transcript"),
+                ("post", "raw transcript"),
+                ("final", 1, "raw transcript.", "failed"),
+            ],
+            archive_events,
+        )
         self.assertFalse(push_to_talk.state.is_post_processing)
         self.assertEqual(0, push_to_talk.state.post_processing_session_count)
 

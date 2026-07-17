@@ -11,6 +11,7 @@ import pytest
 
 import history_store
 import push_to_talk_realtime as app
+from transcript_store import TranscriptStore
 
 
 class FakeTrayIcon:
@@ -50,6 +51,8 @@ def reset_app_state(monkeypatch, tmp_path: Path):
     app.tray_icon_key = None
     app.tray_status_signature = None
     app.keyboard_listener = None
+    app.transcript_browser_server = None
+    app.transcript_browser_url = ""
     app.input_listener_watchdog_thread = None
     app.input_listener_watchdog_stop.set()
     app.DEVICE_LIST = []
@@ -57,6 +60,7 @@ def reset_app_state(monkeypatch, tmp_path: Path):
     app.shutdown_event.clear()
     monkeypatch.setattr(app, "WORK_LOG_PATH", tmp_path / "work_log.txt")
     monkeypatch.setattr(app, "LOG_PATH", tmp_path / "push_to_talk_realtime.log")
+    monkeypatch.setattr(app, "transcript_store", TranscriptStore(tmp_path / "transcripts.db"))
     FakeThread.created.clear()
 
 
@@ -452,6 +456,63 @@ def test_append_dictation_history_entry_writes_timestamped_single_line(monkeypat
     assert work_log_path.read_text(encoding="utf-8") == (
         "- 2026-01-02 03:04:05 [Dictation] First line Second line\n"
     )
+
+
+def test_archive_raw_and_final_transcript_preserves_both_stages(monkeypatch):
+    calls = []
+
+    class FakeStore:
+        def create_entry(self, **kwargs):
+            calls.append(("create", kwargs))
+            return 42
+
+        def finalize_entry(self, entry_id, **kwargs):
+            calls.append(("finalize", entry_id, kwargs))
+
+    monkeypatch.setattr(app, "transcript_store", FakeStore())
+
+    entry_id = app.archive_raw_transcript(
+        mode=app.MODE_DICTATION,
+        audio_source=app.AUDIO_SOURCE_SYSTEM,
+        transcription_engine=app.TRANSCRIPTION_ENGINE_WHISPER,
+        transcription_model="gpt-4o-mini-transcribe",
+        post_processing_enabled=True,
+        post_process_model="gpt-5.6-luna",
+        instruction_profile="custom",
+        instructions="Preserve names.",
+        raw_text="Um raw text",
+    )
+    app.archive_final_transcript(
+        entry_id,
+        final_text="Raw text.",
+        post_process_status="completed",
+    )
+
+    assert calls == [
+        (
+            "create",
+            {
+                "mode": app.MODE_DICTATION,
+                "audio_source": app.AUDIO_SOURCE_SYSTEM,
+                "transcription_engine": app.TRANSCRIPTION_ENGINE_WHISPER,
+                "transcription_model": "gpt-4o-mini-transcribe",
+                "post_processing_enabled": True,
+                "post_process_model": "gpt-5.6-luna",
+                "instruction_profile": "custom",
+                "instructions": "Preserve names.",
+                "raw_text": "Um raw text",
+            },
+        ),
+        (
+            "finalize",
+            42,
+            {
+                "final_text": "Raw text.",
+                "post_process_status": "completed",
+                "post_process_error": "",
+            },
+        ),
+    ]
 
 
 def test_apply_persisted_settings_loads_hotkeys_and_engine(monkeypatch, tmp_path: Path):
@@ -1623,6 +1684,7 @@ def test_menu_builders_include_expected_top_level_items(monkeypatch):
     ]
     assert [item.text for item in menu] == [
         "Settings",
+        "Open transcript browser",
         "Open transcript history",
         "Restart service",
         "Quit",
@@ -1658,6 +1720,40 @@ def test_ensure_and_open_work_log_create_file_and_log_path(monkeypatch, tmp_path
 
     assert work_log_path.exists() is True
     assert logs == [f"[Tray] Transcript history located at {work_log_path}"]
+
+
+def test_open_transcript_browser_reuses_server(monkeypatch):
+    opened_urls = []
+    launch_calls = []
+    fake_server = object()
+    monkeypatch.setattr(
+        app,
+        "launch_transcript_browser",
+        lambda store, open_browser: launch_calls.append((store, open_browser))
+        or (fake_server, "http://127.0.0.1:4321/"),
+    )
+    monkeypatch.setattr(app.webbrowser, "open", opened_urls.append)
+
+    app.open_transcript_browser()
+    app.open_transcript_browser()
+
+    assert launch_calls == [(app.transcript_store, False)]
+    assert opened_urls == ["http://127.0.0.1:4321/", "http://127.0.0.1:4321/"]
+
+
+def test_stop_transcript_browser_closes_server():
+    calls = []
+    app.transcript_browser_server = SimpleNamespace(
+        shutdown=lambda: calls.append("shutdown"),
+        server_close=lambda: calls.append("close"),
+    )
+    app.transcript_browser_url = "http://127.0.0.1:4321/"
+
+    app.stop_transcript_browser()
+
+    assert calls == ["shutdown", "close"]
+    assert app.transcript_browser_server is None
+    assert app.transcript_browser_url == ""
 
 
 def test_initialize_device_state_reverts_invalid_default_device(monkeypatch):
@@ -1720,11 +1816,12 @@ def test_tray_exit_stops_listener_hides_icon_and_sets_shutdown(monkeypatch):
     icon = FakeTrayIcon()
     icon.visible = True
     monkeypatch.setattr(app, "stop_input_listeners", lambda: stop_calls.append("stop"))
+    monkeypatch.setattr(app, "stop_transcript_browser", lambda: stop_calls.append("browser"))
 
     app.tray_exit(icon)
 
     assert app.shutdown_event.is_set() is True
-    assert stop_calls == ["stop"]
+    assert stop_calls == ["stop", "browser"]
     assert icon.visible is False
     assert icon.stopped == 1
 
@@ -1750,6 +1847,7 @@ def test_main_builds_icon_and_runs_tray(monkeypatch):
     monkeypatch.setattr(app, "build_menu", lambda: "menu")
     monkeypatch.setattr(app.pystray, "Icon", FakeIcon)
     monkeypatch.setattr(app, "stop_input_listeners", lambda: calls.append(("stop",)))
+    monkeypatch.setattr(app, "stop_transcript_browser", lambda: calls.append(("browser",)))
 
     app.main()
 
@@ -1758,6 +1856,7 @@ def test_main_builds_icon_and_runs_tray(monkeypatch):
         ("init", "push_to_talk_realtime", "icon", app.TRAY_TITLE, "menu"),
         ("run", app.tray_setup),
         ("stop",),
+        ("browser",),
         ("release",),
     ]
     assert app.shutdown_event.is_set() is True

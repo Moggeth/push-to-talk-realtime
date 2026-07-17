@@ -30,7 +30,7 @@ jobs:
       - name: Ruff lint
         run: ruff check .
       - name: Pytest with coverage gate
-        run: pytest -vv --cov=push_to_talk_realtime --cov=platform_input --cov=text_processing --cov-report=term-missing
+        run: pytest -vv --cov=push_to_talk_realtime --cov=platform_input --cov=text_processing --cov=transcript_store --cov=transcript_browser --cov-report=term-missing
 
   compatibility:
     runs-on: ${{ matrix.os }}

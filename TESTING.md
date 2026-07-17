@@ -38,7 +38,7 @@ Expected result:
 4) Coverage gate (matches the Linux CI quality job)
 
 ```
-pytest -vv --cov=push_to_talk_realtime --cov=platform_input --cov=text_processing --cov-report=term-missing
+pytest -vv --cov=push_to_talk_realtime --cov=platform_input --cov=text_processing --cov=transcript_store --cov=transcript_browser --cov-report=term-missing
 ```
 
 Expected result:
@@ -59,6 +59,7 @@ CI now runs:
   - First-press startup race handling: a release that arrives while a session is still starting is remembered and stops the new recording cleanly.
   - Persisted dictation hotkey kind/tokens, conservative Whisper recorded-model default, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, menu builders, tray startup/shutdown, and `main()` bootstrap wiring.
   - GPT post-processing model/profile persistence, tray controls, custom instruction loading, Responses API payloads, blank-input handling, raw-transcript fallback on API failure, reference-counted processing state, and distinct tray feedback.
+  - Always-on SQLite transcript storage, raw-before-GPT ordering, finalization and failure status, search, deletion, HTML escaping, loopback browser requests, deletion-token validation, and browser shutdown.
   - Single-instance startup guard, hotkey-listener watchdog restart, and delayed restart helper behavior.
 
 - `test_apply_punctuation_options_normalize_capitalize_terminal`
@@ -242,14 +243,26 @@ CI now runs:
 - Expected: the post-processing failure is logged and the original transcript is still pasted instead of being lost.
 - With GPT-4o Realtime selected, expected: enabling post-processing suppresses live delta typing and pastes the revised final text after release.
 
-20) Run on startup toggle
+20) Raw transcript archive and browser
+
+- Capture one normal dictation and one `Shift + F13` system-audio dictation, with GPT post-processing enabled for at least one of them.
+- Open `Open transcript browser` from the tray.
+- Expected: the browser opens on a `127.0.0.1` address and shows each capture with raw and final text side by side, source/model metadata, and processing status.
+- Search for a phrase from either raw or final text.
+- Expected: matching entries remain visible.
+- Delete one entry.
+- Expected: it disappears after the redirect and remains gone after closing and reopening the browser.
+- Disable `Save transcript history`, dictate again, and reopen the browser.
+- Expected: the new raw/final entry is still archived because the toggle controls only `work_log.txt`.
+
+21) Run on startup toggle
 - Open `Settings` -> `Run at login`.
 - Expected on Linux: a user systemd service is written/enabled for the current checkout and starts immediately.
 - Expected on Windows/macOS: the platform startup artifact is created for the current checkout.
 - Toggle it off again.
 - Expected: the startup artifact is disabled or removed cleanly.
 
-21) Tray restart and quit actions
+22) Tray restart and quit actions
 - If running under the included user systemd service on Linux, click `Restart service` and `Quit` from the tray.
 - Expected: `Restart service` restarts the service cleanly and the tray returns.
 - Expected: the dictation hotkey still works after the restart without needing a second manual relaunch.
@@ -258,23 +271,23 @@ CI now runs:
 - Start the app twice manually.
 - Expected: the second launch exits without creating another tray icon or second global hotkey listener.
 
-22) Starter script
+23) Starter script
 - Run `python start_push_to_talk.py`.
 - Expected on Linux with the user service installed: the command returns quickly and the service becomes active.
 - Expected otherwise: the command returns quickly and a detached tray process keeps running after the terminal closes.
 - For debugging, run `python start_push_to_talk.py --foreground`.
 
-23) Mouse-side-button remap
+24) Mouse-side-button remap
 - Map a spare mouse button to `F13`, relaunch the app, then hold that button and speak.
 - Expected: dictation starts/stops cleanly and other apps do not react to the remapped mouse button.
 
-24) Ubuntu tray interactivity
+25) Ubuntu tray interactivity
 - On Ubuntu GNOME/Wayland, launch the app from `python start_push_to_talk.py`.
 - Left-click or right-click the tray icon.
 - Expected: the tray menu opens and actions such as `Settings`, `Restart service`, and `Quit` are clickable.
 - Expected: there are no preset entries such as `Default (no frills)` or `Bells and whistles`; individual toggles remain under `Settings` -> `Advanced`.
 
-25) Runtime logging
+26) Runtime logging
 - Use dictation once, then inspect `push_to_talk_realtime.log`.
 - Expected: each line has a timestamp and thread name.
 - Expected: tray state changes, startup details, and any unhandled thread exception are written there.

@@ -13,6 +13,8 @@ Features
 --------
 - Push-to-talk dictation: record and paste on release.
 - Transcript history: dictations are saved to `work_log.txt` with date/time stamps by default, so each person can review what they said later.
+- Always-on transcript archive: every non-empty dictation and work-log transcript is stored in local SQLite with both the raw speech-to-text result and final output.
+- Local transcript browser: inspect, search, compare, and delete archived entries from a loopback-only HTML interface opened through the tray.
 - Configurable dictation hotkey: set a single key or key combo from the tray menu.
 - Shift-modified dictation: hold `Shift` while pressing the dictation hotkey to capture system audio instead of the microphone.
 - Work log capture: record and append a timestamped entry to `work_log.txt`.
@@ -22,7 +24,7 @@ Features
 - Realtime live dictation: GPT-4o Realtime streams server-side transcript deltas while you are still holding the hotkey.
 - Transcription preferences are saved and restored on next launch.
 - GPT post-processing is off by default and falls back to the original transcript if the additional API call fails or returns no text.
-- Tray controls: `Settings`, `Open transcript history`, `Restart service`, and `Quit`.
+- Tray controls: `Settings`, `Open transcript browser`, `Open transcript history`, `Restart service`, and `Quit`.
 - Busy tray feedback: non-AppIndicator backends update the tray icon live; recording from the microphone is red, system-audio recording is blue, transcription is orange, and GPT post-processing is an animated magenta. Ubuntu AppIndicator stays on a static icon for stability and writes status changes to the app log.
 - Single-instance guard: accidental duplicate launches exit before installing a second global hotkey listener.
 - Startup hardening: the ready message is logged only after the global hotkey listener starts, and a watchdog restarts the listener if it stops unexpectedly.
@@ -47,6 +49,7 @@ Hotkeys
 Tray Menu
 ---------
 - Settings: shortcuts, model, mode, input device, punctuation, startup, transcript history, and advanced toggles.
+- Open transcript browser: starts a private `127.0.0.1` web interface and opens it in the default browser. Raw and final text appear side by side, with search and per-entry deletion.
 - Open transcript history: opens `work_log.txt`.
 - Restart service: restarts the systemd user service when managed by systemd, otherwise waits for the current tray instance to exit before relaunching the tracked entry point.
 - Quit: exits the tray app, or stops the systemd user service when managed by systemd.
@@ -73,6 +76,7 @@ Settings includes:
   - Normalize whitespace.
 - Run at login: installs or removes the platform startup hook for the current checkout.
 - Save transcript history: on by default; when enabled, each final dictation is appended to `work_log.txt`.
+  This controls only the legacy text file; the raw/final SQLite archive remains always on.
 - Advanced: toggle mode, beeps, status tooltip, mute monitor, and refresh audio devices.
 
 Setup
@@ -190,6 +194,7 @@ Environment variables:
 - `REALTIME_SERVER_VAD_PREFIX_MS` (optional): server VAD prefix padding in ms, default `300`.
 - `REALTIME_SERVER_VAD_SILENCE_MS` (optional): server VAD silence duration in ms, default `700`.
 - `PUSH_TO_TALK_SETTINGS_PATH` (optional): override path for persisted tray settings (`settings.json` by default).
+- `PUSH_TO_TALK_TRANSCRIPT_DB_PATH` (optional): override the always-on SQLite archive path (`transcripts.db` beside the app by default).
 - `DICTATION_HOTKEY` (optional): single-key trigger for dictation, default `F13`.
 - `WORKLOG_HOTKEY` (optional): single-key trigger for work log capture, default `F14`.
 - `PUSH_TO_TALK_SERVICE_NAME` (optional): service name used by the tray `Restart` / `Quit` actions, default `push-to-talk-realtime.service`.
@@ -237,6 +242,9 @@ Notes and tips
 - If a target app blocks simulated paste, trigger paste manually from the
   clipboard or try running the console with elevated permissions on Windows.
 - `work_log.txt` is a plain text history file. Dictations are tagged as `[Dictation]` and manual work-log captures are tagged as `[Work log]`.
+- `transcripts.db` is the authoritative local archive for new captures. The raw transcript is committed before GPT post-processing begins, then the same row receives the final text and processing status. Existing `work_log.txt` rows are not retroactively imported.
+- The transcript browser binds only to `127.0.0.1`, loads no external assets, escapes transcript content, and requires a per-server token for deletion requests. It stops when the tray app exits.
+- Deleting an entry in the browser removes it from `transcripts.db`; it does not rewrite older lines already appended to `work_log.txt`.
 - Punctuation options affect both dictation and work log text content.
 - GPT post-processing runs before local punctuation options. It uses the Responses API with response storage disabled and sends only the transcript plus the selected instructions.
 - A post-processing error is logged and the untouched transcript continues through the normal punctuation, history, work-log, and paste paths.

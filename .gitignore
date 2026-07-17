@@ -36,4 +36,9 @@ push_to_talk_realtime.py.py
 __pycache__/push_to_talk_realtime.cpython-313.pyc
 settings.json
 post_process_instructions.txt
+transcripts.db
+transcripts.db-shm
+transcripts.db-wal
+output/
+.playwright-cli/
 *.lnk

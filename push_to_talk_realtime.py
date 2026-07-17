@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 import traceback
+import webbrowser
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -72,6 +73,8 @@ from text_processing import (
     apply_punctuation_options as apply_punctuation_options_core,
 )
 from text_processing import prepare_clipboard_text as prepare_clipboard_text_core
+from transcript_browser import TranscriptBrowserServer, launch_transcript_browser
+from transcript_store import TranscriptStore
 
 # Import after desktop_bootstrap configures the Linux tray backend.
 import pystray
@@ -214,6 +217,9 @@ STARTER_SCRIPT_PATH = SCRIPT_DIR / "start_push_to_talk.py"
 WORK_LOG_PATH = Path(os.getenv("WORK_LOG_PATH") or (SCRIPT_DIR / "work_log.txt"))
 SETTINGS_PATH = Path(os.getenv("PUSH_TO_TALK_SETTINGS_PATH") or (SCRIPT_DIR / "settings.json"))
 LOG_PATH = Path(os.getenv("PUSH_TO_TALK_LOG_PATH") or (SCRIPT_DIR / "push_to_talk_realtime.log"))
+TRANSCRIPT_DB_PATH = Path(
+    os.getenv("PUSH_TO_TALK_TRANSCRIPT_DB_PATH") or (SCRIPT_DIR / "transcripts.db")
+)
 POST_PROCESS_INSTRUCTIONS_PATH = Path(
     os.getenv("OPENAI_POST_PROCESS_INSTRUCTIONS_PATH")
     or (SCRIPT_DIR / "post_process_instructions.txt")
@@ -506,6 +512,10 @@ transcription_warmup_finished = threading.Event()
 output_keyboard_lock = threading.Lock()
 log_write_lock = threading.Lock()
 tray_ui_lock = threading.RLock()
+transcript_store = TranscriptStore(TRANSCRIPT_DB_PATH)
+transcript_browser_lock = threading.Lock()
+transcript_browser_server: TranscriptBrowserServer | None = None
+transcript_browser_url = ""
 log_file_failure_reported = False
 
 # -------------------- Utilities --------------------
@@ -1116,6 +1126,57 @@ def append_work_log_entry(text: str) -> None:
 
 def append_dictation_history_entry(text: str) -> None:
     append_history_entry(text, "Dictation")
+
+
+def archive_raw_transcript(
+    *,
+    mode: str,
+    audio_source: str,
+    transcription_engine: str,
+    transcription_model: str,
+    post_processing_enabled: bool,
+    post_process_model: str,
+    instruction_profile: str,
+    instructions: str,
+    raw_text: str,
+) -> int | None:
+    try:
+        entry_id = transcript_store.create_entry(
+            mode=mode,
+            audio_source=audio_source,
+            transcription_engine=transcription_engine,
+            transcription_model=transcription_model,
+            post_processing_enabled=post_processing_enabled,
+            post_process_model=post_process_model,
+            instruction_profile=instruction_profile,
+            instructions=instructions,
+            raw_text=raw_text,
+        )
+        log(f"[Archive] Preserved raw transcript as entry {entry_id}.")
+        return entry_id
+    except Exception as exc:  # pylint: disable=broad-except
+        log("[Archive] Unable to preserve raw transcript:", exc)
+        return None
+
+
+def archive_final_transcript(
+    entry_id: int | None,
+    *,
+    final_text: str,
+    post_process_status: str,
+    post_process_error: str = "",
+) -> None:
+    if entry_id is None:
+        return
+    try:
+        transcript_store.finalize_entry(
+            entry_id,
+            final_text=final_text,
+            post_process_status=post_process_status,
+            post_process_error=post_process_error,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        log(f"[Archive] Unable to finalize transcript entry {entry_id}:", exc)
 
 
 # -------------------- Audio device helpers --------------------
@@ -2486,6 +2547,32 @@ def start_listening(
             ) or transcription_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
                 transcription_engine_used = TRANSCRIPTION_ENGINE_GPT4O_REALTIME
         processed_text = transcript_text
+        archive_entry_id: int | None = None
+        post_process_status = "not_requested"
+        post_process_error = ""
+        selected_post_process_instructions = ""
+        if transcript_text.strip():
+            if post_processing_enabled:
+                selected_post_process_instructions = post_process_instructions(
+                    post_process_instruction_profile
+                )
+            archive_entry_id = archive_raw_transcript(
+                mode=mode,
+                audio_source=audio_source,
+                transcription_engine=transcription_engine_used,
+                transcription_model=(
+                    REALTIME_TRANSCRIBE_MODEL
+                    if transcription_engine_used == TRANSCRIPTION_ENGINE_GPT4O_REALTIME
+                    else recorded_transcription_model
+                ),
+                post_processing_enabled=post_processing_enabled,
+                post_process_model=post_process_model if post_processing_enabled else "",
+                instruction_profile=(
+                    post_process_instruction_profile if post_processing_enabled else ""
+                ),
+                instructions=selected_post_process_instructions,
+                raw_text=transcript_text,
+            )
         if post_processing_enabled and transcript_text.strip():
             post_process_start = time.perf_counter()
             mark_post_processing_started()
@@ -2493,10 +2580,11 @@ def start_listening(
                 processed_text = post_process_transcript(
                     transcript_text,
                     post_process_model,
-                    post_process_instructions(post_process_instruction_profile),
+                    selected_post_process_instructions,
                 )
                 if not processed_text:
                     raise ValueError("GPT returned an empty transcript")
+                post_process_status = "completed"
                 elapsed_ms = (time.perf_counter() - post_process_start) * 1000.0
                 log(
                     f"[Post-process] {post_process_model_label(post_process_model)} "
@@ -2504,10 +2592,18 @@ def start_listening(
                 )
             except Exception as exc:  # pylint: disable=broad-except
                 processed_text = transcript_text
+                post_process_status = "failed"
+                post_process_error = str(exc)
                 log("[Post-process] Failed; using original transcript:", exc)
             finally:
                 mark_post_processing_finished()
         final_text = apply_punctuation_options(processed_text)
+        archive_final_transcript(
+            archive_entry_id,
+            final_text=final_text,
+            post_process_status=post_process_status,
+            post_process_error=post_process_error,
+        )
     except Exception as exc:  # pylint: disable=broad-except
         transcribe_error = exc
         log("[Transcription error]", exc)
@@ -2824,6 +2920,37 @@ def open_custom_post_process_instructions(_icon=None, _item=None) -> None:
             log(f"[Tray] Custom GPT instructions located at {POST_PROCESS_INSTRUCTIONS_PATH}")
     except Exception as exc:  # pylint: disable=broad-except
         log("[Tray] Unable to open custom GPT instructions:", exc)
+
+
+def open_transcript_browser(_icon=None, _item=None) -> None:
+    global transcript_browser_server, transcript_browser_url
+    try:
+        with transcript_browser_lock:
+            if transcript_browser_server is None:
+                transcript_browser_server, transcript_browser_url = launch_transcript_browser(
+                    transcript_store,
+                    open_browser=False,
+                )
+                log(f"[Archive] Transcript browser started at {transcript_browser_url}")
+            url = transcript_browser_url
+        webbrowser.open(url)
+    except Exception as exc:  # pylint: disable=broad-except
+        log("[Archive] Unable to open transcript browser:", exc)
+
+
+def stop_transcript_browser() -> None:
+    global transcript_browser_server, transcript_browser_url
+    with transcript_browser_lock:
+        server = transcript_browser_server
+        transcript_browser_server = None
+        transcript_browser_url = ""
+    if server is None:
+        return
+    try:
+        server.shutdown()
+        server.server_close()
+    except Exception as exc:  # pylint: disable=broad-except
+        log("[Archive] Unable to stop transcript browser:", exc)
 
 
 def update_tray_icon() -> None:
@@ -3540,6 +3667,7 @@ def build_settings_menu() -> pystray.Menu:
 def build_menu() -> pystray.Menu:
     return pystray.Menu(
         pystray.MenuItem("Settings", build_settings_menu()),
+        pystray.MenuItem("Open transcript browser", open_transcript_browser),
         pystray.MenuItem("Open transcript history", open_work_log),
         pystray.MenuItem("Restart service", restart_app),
         pystray.MenuItem("Quit", quit_app),
@@ -3666,6 +3794,7 @@ def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
     global tray_icon_key, tray_status_signature
     shutdown_event.set()
     stop_input_listeners()
+    stop_transcript_browser()
     tray_icon_key = None
     tray_status_signature = None
     if icon is None:
@@ -3695,6 +3824,7 @@ def main() -> None:
         tray_exit(tray_icon)
     finally:
         stop_input_listeners()
+        stop_transcript_browser()
         shutdown_event.set()
         instance_guard.release()
 
