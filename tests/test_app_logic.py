@@ -397,6 +397,29 @@ def test_output_turn_waits_for_earlier_sessions():
     assert ordered_sessions == [1, 2]
 
 
+def test_post_processing_state_is_reference_counted(monkeypatch):
+    status_updates = []
+    monkeypatch.setattr(app, "update_tray_status", status_updates.append)
+
+    app.mark_post_processing_started()
+    app.mark_post_processing_started()
+    app.mark_post_processing_finished()
+
+    assert app.state.is_post_processing is True
+    assert app.state.post_processing_session_count == 1
+
+    app.mark_post_processing_finished()
+
+    assert app.state.is_post_processing is False
+    assert app.state.post_processing_session_count == 0
+    assert status_updates == [
+        "post-processing started",
+        "post-processing started",
+        "post-processing finished",
+        "post-processing finished",
+    ]
+
+
 def test_append_work_log_entry_writes_timestamped_single_line(monkeypatch, tmp_path: Path):
     class FixedDateTime:
         @staticmethod
@@ -988,6 +1011,19 @@ def test_update_tray_tooltip_identifies_system_audio_source():
     )
 
 
+def test_update_tray_tooltip_identifies_gpt_post_processing():
+    app.tray_icon = FakeTrayIcon()
+    with app.state.lock:
+        app.state.tooltip_enabled = True
+        app.state.is_transcribing = True
+        app.state.is_post_processing = True
+        app.state.mode = app.MODE_DICTATION
+
+    app.update_tray_tooltip()
+
+    assert app.tray_icon.title == (f"{app.TRAY_TITLE} - Post-processing (Dictation, Whisper)")
+
+
 def test_update_tray_tooltip_resets_title_when_disabled():
     app.tray_icon = FakeTrayIcon()
 
@@ -1033,6 +1069,26 @@ def test_update_tray_icon_uses_system_audio_listening_color(monkeypatch):
     assert app.tray_icon.icon == "icon"
 
 
+def test_update_tray_icon_uses_animated_post_processing_color(monkeypatch):
+    app.tray_icon = FakeTrayIcon()
+    renders = []
+    monkeypatch.setattr(app, "APPINDICATOR_BACKEND", False)
+    monkeypatch.setattr(
+        app,
+        "create_tray_icon_image",
+        lambda **kwargs: renders.append((kwargs["color"], kwargs["spinner_step"])) or "icon",
+    )
+    with app.state.lock:
+        app.state.is_transcribing = True
+        app.state.is_post_processing = True
+        app.state.tray_spinner_step = 4
+
+    app.update_tray_icon()
+
+    assert renders == [(app.TRAY_COLOR_POST_PROCESSING, 4)]
+    assert app.tray_icon.icon == "icon"
+
+
 def test_update_tray_icon_skips_spinner_on_appindicator(monkeypatch):
     app.tray_icon = FakeTrayIcon()
     monkeypatch.setattr(app, "APPINDICATOR_BACKEND", True)
@@ -1044,6 +1100,20 @@ def test_update_tray_icon_skips_spinner_on_appindicator(monkeypatch):
 
     assert app.tray_icon.icon is None
     assert app.tray_icon_key == (app.TRAY_COLOR_TRANSCRIBING, None)
+
+
+def test_update_tray_icon_marks_post_processing_on_appindicator(monkeypatch):
+    app.tray_icon = FakeTrayIcon()
+    monkeypatch.setattr(app, "APPINDICATOR_BACKEND", True)
+    with app.state.lock:
+        app.state.is_transcribing = True
+        app.state.is_post_processing = True
+        app.state.tray_spinner_step = 4
+
+    app.update_tray_icon()
+
+    assert app.tray_icon.icon is None
+    assert app.tray_icon_key == (app.TRAY_COLOR_POST_PROCESSING, None)
 
 
 def test_update_tray_icon_marks_system_audio_on_appindicator(monkeypatch):

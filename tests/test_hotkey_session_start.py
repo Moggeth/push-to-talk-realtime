@@ -43,6 +43,8 @@ class HotkeySessionStartTests(unittest.TestCase):
             push_to_talk.state.should_stop = False
             push_to_talk.state.toggle_mode_enabled = False
             push_to_talk.state.post_processing_enabled = False
+            push_to_talk.state.is_post_processing = False
+            push_to_talk.state.post_processing_session_count = 0
             push_to_talk.state.post_process_model = "gpt-5.6-luna"
             push_to_talk.state.post_process_instruction_profile = "clean_up"
             push_to_talk.state.active_hotkey = ""
@@ -220,6 +222,8 @@ class HotkeySessionStartTests(unittest.TestCase):
             )
 
         self.assertEqual(["raw transcript."], pasted)
+        self.assertFalse(push_to_talk.state.is_post_processing)
+        self.assertEqual(0, push_to_talk.state.post_processing_session_count)
 
 
 if __name__ == "__main__":

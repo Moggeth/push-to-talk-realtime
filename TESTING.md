@@ -58,7 +58,7 @@ CI now runs:
   - Keyboard and mouse hotkey press/release transitions, double-tap work-log handling, and toggle mode stop behavior.
   - First-press startup race handling: a release that arrives while a session is still starting is remembered and stops the new recording cleanly.
   - Persisted dictation hotkey kind/tokens, conservative Whisper recorded-model default, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, menu builders, tray startup/shutdown, and `main()` bootstrap wiring.
-  - GPT post-processing model/profile persistence, tray controls, custom instruction loading, Responses API payloads, blank-input handling, and raw-transcript fallback on API failure.
+  - GPT post-processing model/profile persistence, tray controls, custom instruction loading, Responses API payloads, blank-input handling, raw-transcript fallback on API failure, reference-counted processing state, and distinct tray feedback.
   - Single-instance startup guard, hotkey-listener watchdog restart, and delayed restart helper behavior.
 
 - `test_apply_punctuation_options_normalize_capitalize_terminal`
@@ -235,6 +235,7 @@ CI now runs:
 - Open `Settings` -> `GPT post-processing`, select `Clean up speech`, choose a model, and enable it.
 - Dictate a sentence with filler words or a false start, then release the hotkey.
 - Expected: the final pasted text is revised according to the selected instructions; the recording behavior is unchanged.
+- Expected: after orange transcription begins, the tray icon changes to an animated magenta while GPT revises the text, then returns to green when output finishes. The tooltip says `Post-processing` when tooltips are enabled.
 - Switch to `Custom instructions`, open the custom instructions file, add a small rule such as preserving a product name exactly, save it, and dictate again.
 - Expected: the next result uses the edited instruction without restarting the tray app.
 - Temporarily disconnect the network and dictate again.

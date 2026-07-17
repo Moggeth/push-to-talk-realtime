@@ -23,7 +23,7 @@ Features
 - Transcription preferences are saved and restored on next launch.
 - GPT post-processing is off by default and falls back to the original transcript if the additional API call fails or returns no text.
 - Tray controls: `Settings`, `Open transcript history`, `Restart service`, and `Quit`.
-- Busy tray feedback: non-AppIndicator backends update the tray icon live; recording from the microphone is red, system-audio recording is blue, and transcription is orange. Ubuntu AppIndicator stays on a static icon for stability and writes status changes to the app log.
+- Busy tray feedback: non-AppIndicator backends update the tray icon live; recording from the microphone is red, system-audio recording is blue, transcription is orange, and GPT post-processing is an animated magenta. Ubuntu AppIndicator stays on a static icon for stability and writes status changes to the app log.
 - Single-instance guard: accidental duplicate launches exit before installing a second global hotkey listener.
 - Startup hardening: the ready message is logged only after the global hotkey listener starts, and a watchdog restarts the listener if it stops unexpectedly.
 - First-press reliability: if the dictation key is released while the audio session is still starting, the release is remembered and applied as soon as recording becomes active.
@@ -241,7 +241,7 @@ Notes and tips
 - GPT post-processing runs before local punctuation options. It uses the Responses API with response storage disabled and sends only the transcript plus the selected instructions.
 - A post-processing error is logged and the untouched transcript continues through the normal punctuation, history, work-log, and paste paths.
 - Paste suffix options affect dictation paste only.
-- Tray icon color: green when idle, red while listening, and orange while transcribing. Non-AppIndicator backends also animate a spinner during transcription.
+- Tray icon color: green when idle, red for microphone recording, blue for system-audio recording, orange while transcribing, and magenta while GPT post-processing. Non-AppIndicator backends animate a spinner during transcription and post-processing.
 - While an earlier transcript is still processing, you can start a new recording; completed dictations are pasted in the order the recordings started.
 - Realtime live typing applies only to dictation mode and may need app focus to stay in the target field.
 - GPT-4o Realtime is hard-switched to server-side mode (no local chunking and no Whisper fallback inside realtime mode).

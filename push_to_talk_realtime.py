@@ -333,6 +333,7 @@ TRAY_COLOR_READY = (46, 160, 67, 255)
 TRAY_COLOR_LISTENING = (220, 53, 69, 255)
 TRAY_COLOR_SYSTEM_AUDIO_LISTENING = (0, 123, 255, 255)
 TRAY_COLOR_TRANSCRIBING = (255, 166, 0, 255)
+TRAY_COLOR_POST_PROCESSING = (186, 85, 211, 255)
 TRAY_SPINNER_STEPS = 12
 TRAY_SPINNER_SWEEP_DEG = 90
 TRAY_SPINNER_INTERVAL_S = 0.1
@@ -371,6 +372,8 @@ class SessionState:
     is_listening: bool = False
     is_transcribing: bool = False
     transcribing_session_count: int = 0
+    is_post_processing: bool = False
+    post_processing_session_count: int = 0
     session_start_pending: bool = False
     pending_start_hotkey_kind: str = ""
     pending_start_hotkey_tokens: tuple[str, ...] = ()
@@ -557,10 +560,12 @@ def install_runtime_hooks() -> None:
 def current_tray_status_signature() -> tuple[str, str, str, str, str, bool, bool]:
     with state.lock:
         status = "Ready"
-        if state.is_transcribing:
-            status = "Transcribing"
-        elif state.is_listening:
+        if state.is_listening:
             status = "Listening"
+        elif state.is_post_processing:
+            status = "Post-processing"
+        elif state.is_transcribing:
+            status = "Transcribing"
         mode = "Dictation" if state.mode == MODE_DICTATION else "Worklog"
         device_label = state.active_device_label
         audio_source = state.active_audio_source
@@ -1073,6 +1078,20 @@ def mark_transcription_finished(final_text: str = "") -> None:
         state.transcribing_session_count = max(0, state.transcribing_session_count - 1)
         state.is_transcribing = state.transcribing_session_count > 0
     update_tray_status("transcription finished")
+
+
+def mark_post_processing_started() -> None:
+    with state.lock:
+        state.post_processing_session_count += 1
+        state.is_post_processing = state.post_processing_session_count > 0
+    update_tray_status("post-processing started")
+
+
+def mark_post_processing_finished() -> None:
+    with state.lock:
+        state.post_processing_session_count = max(0, state.post_processing_session_count - 1)
+        state.is_post_processing = state.post_processing_session_count > 0
+    update_tray_status("post-processing finished")
 
 
 def wait_for_output_turn(session_id: int) -> None:
@@ -2469,6 +2488,7 @@ def start_listening(
         processed_text = transcript_text
         if post_processing_enabled and transcript_text.strip():
             post_process_start = time.perf_counter()
+            mark_post_processing_started()
             try:
                 processed_text = post_process_transcript(
                     transcript_text,
@@ -2485,6 +2505,8 @@ def start_listening(
             except Exception as exc:  # pylint: disable=broad-except
                 processed_text = transcript_text
                 log("[Post-process] Failed; using original transcript:", exc)
+            finally:
+                mark_post_processing_finished()
         final_text = apply_punctuation_options(processed_text)
     except Exception as exc:  # pylint: disable=broad-except
         transcribe_error = exc
@@ -2812,6 +2834,7 @@ def update_tray_icon() -> None:
         with state.lock:
             is_listening = state.is_listening
             is_transcribing = state.is_transcribing
+            is_post_processing = state.is_post_processing
             audio_source = state.active_audio_source
         if is_listening:
             tray_icon_key = (
@@ -2820,6 +2843,8 @@ def update_tray_icon() -> None:
                 else TRAY_COLOR_LISTENING,
                 None,
             )
+        elif is_post_processing:
+            tray_icon_key = (TRAY_COLOR_POST_PROCESSING, None)
         elif is_transcribing:
             tray_icon_key = (TRAY_COLOR_TRANSCRIBING, None)
         else:
@@ -2828,6 +2853,7 @@ def update_tray_icon() -> None:
     with state.lock:
         is_listening = state.is_listening
         is_transcribing = state.is_transcribing
+        is_post_processing = state.is_post_processing
         spinner_step = state.tray_spinner_step
         audio_source = state.active_audio_source
     if is_listening:
@@ -2836,11 +2862,13 @@ def update_tray_icon() -> None:
             if audio_source == AUDIO_SOURCE_SYSTEM
             else TRAY_COLOR_LISTENING
         )
+    elif is_post_processing:
+        color = TRAY_COLOR_POST_PROCESSING
     elif is_transcribing:
         color = TRAY_COLOR_TRANSCRIBING
     else:
         color = TRAY_COLOR_READY
-    spinner = spinner_step if is_transcribing and not is_listening else None
+    spinner = spinner_step if (is_transcribing or is_post_processing) and not is_listening else None
     if APPINDICATOR_BACKEND:
         spinner = None
     icon_key = (color, spinner)
@@ -2862,6 +2890,7 @@ def update_tray_tooltip() -> None:
         tooltip_enabled = state.tooltip_enabled
         is_listening = state.is_listening
         is_transcribing = state.is_transcribing
+        is_post_processing = state.is_post_processing
         mode = state.mode
         device_label = state.active_device_label
         audio_source = state.active_audio_source
@@ -2874,13 +2903,15 @@ def update_tray_tooltip() -> None:
         return
 
     status = "Ready"
-    if is_transcribing:
-        status = "Transcribing"
-    elif is_listening:
+    if is_listening:
         status = "Listening"
+    elif is_post_processing:
+        status = "Post-processing"
+    elif is_transcribing:
+        status = "Transcribing"
 
     details = []
-    if is_listening or is_transcribing:
+    if is_listening or is_transcribing or is_post_processing:
         details.append("Dictation" if mode == MODE_DICTATION else "Worklog")
         if is_listening and audio_source == AUDIO_SOURCE_SYSTEM:
             details.append("System audio")
@@ -3579,7 +3610,8 @@ def tray_animation_loop() -> None:
         with state.lock:
             is_listening = state.is_listening
             is_transcribing = state.is_transcribing
-        if is_transcribing and not is_listening:
+            is_post_processing = state.is_post_processing
+        if (is_transcribing or is_post_processing) and not is_listening:
             with state.lock:
                 state.tray_spinner_step = (state.tray_spinner_step + 1) % TRAY_SPINNER_STEPS
             update_tray_icon()
