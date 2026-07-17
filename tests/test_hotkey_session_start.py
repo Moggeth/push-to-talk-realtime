@@ -42,6 +42,9 @@ class HotkeySessionStartTests(unittest.TestCase):
             push_to_talk.state.pending_start_stop_requested = False
             push_to_talk.state.should_stop = False
             push_to_talk.state.toggle_mode_enabled = False
+            push_to_talk.state.post_processing_enabled = False
+            push_to_talk.state.post_process_model = "gpt-5.6-luna"
+            push_to_talk.state.post_process_instruction_profile = "clean_up"
             push_to_talk.state.active_hotkey = ""
             push_to_talk.state.active_hotkey_kind = ""
             push_to_talk.state.active_hotkey_tokens = ()
@@ -61,6 +64,9 @@ class HotkeySessionStartTests(unittest.TestCase):
             push_to_talk.state.worklog_is_pressed = False
             push_to_talk.state.pressed_keys.clear()
             push_to_talk.state.shift_keys_down.clear()
+            push_to_talk.state.session_counter = 0
+            push_to_talk.state.next_output_session_id = 1
+            push_to_talk.state.transcribing_session_count = 0
 
     def tearDown(self) -> None:
         push_to_talk.OPENAI_API_KEY = self.original_openai_key
@@ -170,6 +176,50 @@ class HotkeySessionStartTests(unittest.TestCase):
 
         with push_to_talk.state.lock:
             self.assertFalse(push_to_talk.state.session_start_pending)
+
+    def test_post_processing_failure_falls_back_to_original_transcript(self) -> None:
+        push_to_talk.OPENAI_API_KEY = "test-key"
+        key_tokens = push_to_talk.state.dictation_hotkey_tokens
+        pasted = []
+        with push_to_talk.state.lock:
+            push_to_talk.state.session_start_pending = True
+            push_to_talk.state.pending_start_hotkey_kind = push_to_talk.HOTKEY_KIND_KEYBOARD
+            push_to_talk.state.pending_start_hotkey_tokens = key_tokens
+            push_to_talk.state.pending_start_stop_requested = True
+            push_to_talk.state.post_processing_enabled = True
+            push_to_talk.state.dictation_history_enabled = False
+
+        with (
+            patch.object(push_to_talk, "enforce_transcription_engine_dependencies"),
+            patch.object(
+                push_to_talk,
+                "start_recorder_with_fallback",
+                return_value=(True, None, push_to_talk.DEFAULT_DEVICE_LABEL),
+            ),
+            patch.object(push_to_talk, "transcribe_audio", return_value="raw transcript"),
+            patch.object(
+                push_to_talk,
+                "post_process_transcript",
+                side_effect=RuntimeError("temporary API failure"),
+            ),
+            patch.object(
+                push_to_talk,
+                "paste_text",
+                side_effect=lambda text, _target: pasted.append(text) or True,
+            ),
+            patch.object(push_to_talk, "maybe_beep"),
+            patch.object(push_to_talk, "log"),
+        ):
+            push_to_talk.start_listening(
+                push_to_talk.MODE_DICTATION,
+                push_to_talk.HOTKEY_DICTATION,
+                push_to_talk.HOTKEY_KIND_KEYBOARD,
+                key_tokens,
+                None,
+                push_to_talk.DEFAULT_DEVICE_LABEL,
+            )
+
+        self.assertEqual(["raw transcript."], pasted)
 
 
 if __name__ == "__main__":

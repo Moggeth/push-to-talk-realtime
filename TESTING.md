@@ -58,6 +58,7 @@ CI now runs:
   - Keyboard and mouse hotkey press/release transitions, double-tap work-log handling, and toggle mode stop behavior.
   - First-press startup race handling: a release that arrives while a session is still starting is remembered and stops the new recording cleanly.
   - Persisted dictation hotkey kind/tokens, conservative Whisper recorded-model default, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, menu builders, tray startup/shutdown, and `main()` bootstrap wiring.
+  - GPT post-processing model/profile persistence, tray controls, custom instruction loading, Responses API payloads, blank-input handling, and raw-transcript fallback on API failure.
   - Single-instance startup guard, hotkey-listener watchdog restart, and delayed restart helper behavior.
 
 - `test_apply_punctuation_options_normalize_capitalize_terminal`
@@ -229,14 +230,25 @@ CI now runs:
 - Expected: the second recording starts immediately.
 - Expected: both transcripts still appear, and they paste in the order the recordings were made.
 
-19) Run on startup toggle
+19) GPT transcript post-processing
+
+- Open `Settings` -> `GPT post-processing`, select `Clean up speech`, choose a model, and enable it.
+- Dictate a sentence with filler words or a false start, then release the hotkey.
+- Expected: the final pasted text is revised according to the selected instructions; the recording behavior is unchanged.
+- Switch to `Custom instructions`, open the custom instructions file, add a small rule such as preserving a product name exactly, save it, and dictate again.
+- Expected: the next result uses the edited instruction without restarting the tray app.
+- Temporarily disconnect the network and dictate again.
+- Expected: the post-processing failure is logged and the original transcript is still pasted instead of being lost.
+- With GPT-4o Realtime selected, expected: enabling post-processing suppresses live delta typing and pastes the revised final text after release.
+
+20) Run on startup toggle
 - Open `Settings` -> `Run at login`.
 - Expected on Linux: a user systemd service is written/enabled for the current checkout and starts immediately.
 - Expected on Windows/macOS: the platform startup artifact is created for the current checkout.
 - Toggle it off again.
 - Expected: the startup artifact is disabled or removed cleanly.
 
-20) Tray restart and quit actions
+21) Tray restart and quit actions
 - If running under the included user systemd service on Linux, click `Restart service` and `Quit` from the tray.
 - Expected: `Restart service` restarts the service cleanly and the tray returns.
 - Expected: the dictation hotkey still works after the restart without needing a second manual relaunch.
@@ -245,17 +257,17 @@ CI now runs:
 - Start the app twice manually.
 - Expected: the second launch exits without creating another tray icon or second global hotkey listener.
 
-21) Starter script
+22) Starter script
 - Run `python start_push_to_talk.py`.
 - Expected on Linux with the user service installed: the command returns quickly and the service becomes active.
 - Expected otherwise: the command returns quickly and a detached tray process keeps running after the terminal closes.
 - For debugging, run `python start_push_to_talk.py --foreground`.
 
-22) Mouse-side-button remap
+23) Mouse-side-button remap
 - Map a spare mouse button to `F13`, relaunch the app, then hold that button and speak.
 - Expected: dictation starts/stops cleanly and other apps do not react to the remapped mouse button.
 
-23) Ubuntu tray interactivity
+24) Ubuntu tray interactivity
 - On Ubuntu GNOME/Wayland, launch the app from `python start_push_to_talk.py`.
 - Left-click or right-click the tray icon.
 - Expected: the tray menu opens and actions such as `Settings`, `Restart service`, and `Quit` are clickable.

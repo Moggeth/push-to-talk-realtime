@@ -18,8 +18,10 @@ Features
 - Work log capture: record and append a timestamped entry to `work_log.txt`.
 - Transcription mode toggle: choose record-then-paste or GPT-4o Realtime from the tray menu.
 - Recorded model selector: choose GPT-4o Transcribe, GPT-4o Mini Transcribe, or Whisper for the record-then-paste path.
+- Optional GPT post-processing: revise finished transcripts before paste or work-log output, with selectable models and instruction profiles.
 - Realtime live dictation: GPT-4o Realtime streams server-side transcript deltas while you are still holding the hotkey.
 - Transcription preferences are saved and restored on next launch.
+- GPT post-processing is off by default and falls back to the original transcript if the additional API call fails or returns no text.
 - Tray controls: `Settings`, `Open transcript history`, `Restart service`, and `Quit`.
 - Busy tray feedback: non-AppIndicator backends update the tray icon live; recording from the microphone is red, system-audio recording is blue, and transcription is orange. Ubuntu AppIndicator stays on a static icon for stability and writes status changes to the app log.
 - Single-instance guard: accidental duplicate launches exit before installing a second global hotkey listener.
@@ -58,6 +60,12 @@ Settings includes:
 - Transcription mode:
   - Record then paste: transcribes after key release and preserves the original clipboard/paste workflow.
   - GPT-4o Realtime: strict server-side websocket transcription with server VAD; streams deltas while recording, then finalizes on release.
+- GPT post-processing:
+  - Enabled: turns the additional text-revision call on or off immediately. It is off by default.
+  - Model: choose GPT-5.6 Luna (fast), Terra (balanced), or Sol (highest quality).
+  - Instructions: choose Clean up speech, Make concise, Light touch, or Custom instructions.
+  - Open custom instructions...: opens the local `post_process_instructions.txt` file. The app creates it on first use and rereads it for every custom-profile request, so edits do not require a restart.
+  - Applies to both pasted dictation and work-log entries. If post-processing is enabled with GPT-4o Realtime, live typing is withheld until the revised final text is ready.
 - Punctuation:
   - Suffix: None / Space / Newline (affects pasted dictation only).
   - Ensure terminal punctuation (adds "." if missing; enabled by default).
@@ -175,6 +183,8 @@ Environment variables:
 - `OPENAI_REALTIME_TRANSCRIBE_PROMPT` (optional): transcription prompt for realtime mode.
 - `OPENAI_REALTIME_WS_URL` (optional): websocket URL for realtime transcription, default `wss://api.openai.com/v1/realtime?intent=transcription`.
 - `OPENAI_REALTIME_WS_USE_BETA_HEADER` (optional): `0` (default) uses GA websocket headers; set to `1` only if you intentionally need legacy beta header behavior.
+- `OPENAI_POST_PROCESS_MODEL` (optional): initial GPT post-processing model, default `gpt-5.6-luna`; tray selections are persisted in `settings.json`.
+- `OPENAI_POST_PROCESS_INSTRUCTIONS_PATH` (optional): custom instruction file path, default `post_process_instructions.txt` beside the app.
 - `REALTIME_LIVE_TYPING` (optional): `1` (default) enables live delta typing for dictation, `0` disables it.
 - `REALTIME_SERVER_VAD_THRESHOLD` (optional): server VAD threshold, default `0.5`.
 - `REALTIME_SERVER_VAD_PREFIX_MS` (optional): server VAD prefix padding in ms, default `300`.
@@ -228,6 +238,8 @@ Notes and tips
   clipboard or try running the console with elevated permissions on Windows.
 - `work_log.txt` is a plain text history file. Dictations are tagged as `[Dictation]` and manual work-log captures are tagged as `[Work log]`.
 - Punctuation options affect both dictation and work log text content.
+- GPT post-processing runs before local punctuation options. It uses the Responses API with response storage disabled and sends only the transcript plus the selected instructions.
+- A post-processing error is logged and the untouched transcript continues through the normal punctuation, history, work-log, and paste paths.
 - Paste suffix options affect dictation paste only.
 - Tray icon color: green when idle, red while listening, and orange while transcribing. Non-AppIndicator backends also animate a spinner during transcription.
 - While an earlier transcript is still processing, you can start a new recording; completed dictations are pasted in the order the recordings started.
