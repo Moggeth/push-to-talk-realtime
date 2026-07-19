@@ -340,9 +340,15 @@ TRAY_COLOR_LISTENING = (220, 53, 69, 255)
 TRAY_COLOR_SYSTEM_AUDIO_LISTENING = (0, 123, 255, 255)
 TRAY_COLOR_TRANSCRIBING = (255, 166, 0, 255)
 TRAY_COLOR_POST_PROCESSING = (186, 85, 211, 255)
-TRAY_SPINNER_STEPS = 12
-TRAY_SPINNER_SWEEP_DEG = 90
-TRAY_SPINNER_INTERVAL_S = 0.1
+TRAY_ACTIVITY_READY = "ready"
+TRAY_ACTIVITY_LISTENING = "listening"
+TRAY_ACTIVITY_TRANSCRIBING = "transcribing"
+TRAY_ACTIVITY_POST_PROCESSING = "post_processing"
+TRAY_SPINNER_STEPS = 16
+TRAY_SPINNER_SWEEP_DEG = 64
+TRAY_SPINNER_INTERVAL_S = 0.075
+TRAY_IDLE_INTERVAL_S = 0.05
+TRAY_TRANSITION_BLEND = (0.78, 0.94, 1.0)
 APPINDICATOR_BACKEND = pystray.Icon.__module__ == "pystray._appindicator"
 
 
@@ -446,7 +452,11 @@ input_listener_watchdog_stop = threading.Event()
 INPUT_LISTENER_BOOT_REBIND_DELAYS_S = (8.0, 30.0, 90.0)
 tray_icon: TrayIconLike | None = None
 tray_animation_thread: threading.Thread | None = None
-tray_icon_key: tuple[tuple[int, int, int, int], int | None] | None = None
+tray_icon_key: tuple[tuple[int, int, int, int], int | None, str] | None = None
+tray_target_color: tuple[int, int, int, int] | None = None
+tray_display_color: tuple[int, int, int, int] | None = None
+tray_transition_from_color: tuple[int, int, int, int] | None = None
+tray_transition_frame = len(TRAY_TRANSITION_BLEND)
 tray_status_signature: tuple[str, str, str, str, bool, bool] | None = None
 DEVICE_LIST: list[tuple[int, str]] = []
 HOTKEY_MODIFIER_ORDER = ("CTRL", "ALT", "SHIFT", "SUPER", "ALT_GR")
@@ -2953,30 +2963,26 @@ def stop_transcript_browser() -> None:
         log("[Archive] Unable to stop transcript browser:", exc)
 
 
-def update_tray_icon() -> None:
-    global tray_icon_key
-    if tray_icon is None:
-        return
-    if APPINDICATOR_BACKEND:
-        with state.lock:
-            is_listening = state.is_listening
-            is_transcribing = state.is_transcribing
-            is_post_processing = state.is_post_processing
-            audio_source = state.active_audio_source
-        if is_listening:
-            tray_icon_key = (
-                TRAY_COLOR_SYSTEM_AUDIO_LISTENING
-                if audio_source == AUDIO_SOURCE_SYSTEM
-                else TRAY_COLOR_LISTENING,
-                None,
-            )
-        elif is_post_processing:
-            tray_icon_key = (TRAY_COLOR_POST_PROCESSING, None)
-        elif is_transcribing:
-            tray_icon_key = (TRAY_COLOR_TRANSCRIBING, None)
-        else:
-            tray_icon_key = (TRAY_COLOR_READY, None)
-        return
+def blend_tray_colors(
+    start: tuple[int, int, int, int],
+    end: tuple[int, int, int, int],
+    amount: float,
+) -> tuple[int, int, int, int]:
+    progress = min(1.0, max(0.0, amount))
+    return tuple(round(a + (b - a) * progress) for a, b in zip(start, end, strict=True))
+
+
+def reset_tray_visual_state() -> None:
+    global tray_icon_key, tray_target_color, tray_display_color
+    global tray_transition_from_color, tray_transition_frame
+    tray_icon_key = None
+    tray_target_color = None
+    tray_display_color = None
+    tray_transition_from_color = None
+    tray_transition_frame = len(TRAY_TRANSITION_BLEND)
+
+
+def tray_visual_target() -> tuple[tuple[int, int, int, int], str, int | None]:
     with state.lock:
         is_listening = state.is_listening
         is_transcribing = state.is_transcribing
@@ -2989,20 +2995,57 @@ def update_tray_icon() -> None:
             if audio_source == AUDIO_SOURCE_SYSTEM
             else TRAY_COLOR_LISTENING
         )
-    elif is_post_processing:
-        color = TRAY_COLOR_POST_PROCESSING
-    elif is_transcribing:
-        color = TRAY_COLOR_TRANSCRIBING
-    else:
-        color = TRAY_COLOR_READY
-    spinner = spinner_step if (is_transcribing or is_post_processing) and not is_listening else None
+        return color, TRAY_ACTIVITY_LISTENING, None
+    if is_post_processing:
+        return TRAY_COLOR_POST_PROCESSING, TRAY_ACTIVITY_POST_PROCESSING, spinner_step
+    if is_transcribing:
+        return TRAY_COLOR_TRANSCRIBING, TRAY_ACTIVITY_TRANSCRIBING, spinner_step
+    return TRAY_COLOR_READY, TRAY_ACTIVITY_READY, None
+
+
+def tray_color_transition_pending() -> bool:
+    return tray_target_color is not None and tray_display_color != tray_target_color
+
+
+def update_tray_icon() -> None:
+    global tray_icon_key, tray_target_color, tray_display_color
+    global tray_transition_from_color, tray_transition_frame
+    if tray_icon is None:
+        return
+    target_color, activity, spinner = tray_visual_target()
     if APPINDICATOR_BACKEND:
-        spinner = None
-    icon_key = (color, spinner)
+        tray_icon_key = (target_color, None, activity)
+        return
+
+    if tray_display_color is None:
+        tray_target_color = target_color
+        tray_display_color = target_color
+        tray_transition_from_color = target_color
+        tray_transition_frame = len(TRAY_TRANSITION_BLEND)
+    elif target_color != tray_target_color:
+        tray_transition_from_color = tray_display_color
+        tray_target_color = target_color
+        tray_transition_frame = 0
+
+    if tray_transition_frame < len(TRAY_TRANSITION_BLEND):
+        tray_display_color = blend_tray_colors(
+            tray_transition_from_color or target_color,
+            target_color,
+            TRAY_TRANSITION_BLEND[tray_transition_frame],
+        )
+        tray_transition_frame += 1
+    else:
+        tray_display_color = target_color
+
+    icon_key = (tray_display_color, spinner, activity)
     if icon_key == tray_icon_key:
         return
     try:
-        tray_icon.icon = create_tray_icon_image(color=color, spinner_step=spinner)
+        tray_icon.icon = create_tray_icon_image(
+            color=tray_display_color,
+            spinner_step=spinner,
+            activity=activity,
+        )
         tray_icon_key = icon_key
     except Exception as exc:  # pylint: disable=broad-except
         log("[Tray] Icon update failed:", exc)
@@ -3698,48 +3741,116 @@ def create_tray_icon_image(
     size: int = TRAY_ICON_SIZE,
     color: tuple[int, int, int, int] = TRAY_COLOR_READY,
     spinner_step: int | None = None,
+    activity: str = TRAY_ACTIVITY_READY,
 ) -> Image.Image:
     image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.ellipse((0, 0, size, size), fill=color)
-    inset = int(size * 0.28)
-    processing = spinner_step is not None
-    if processing:
-        inner_inset = int(size * 0.22)
-        draw.ellipse(
-            (inner_inset, inner_inset, size - inner_inset, size - inner_inset),
-            fill=(30, 34, 40, 255),
+    outer_bounds = (1, 1, size - 2, size - 2)
+    draw.ellipse(outer_bounds, fill=color)
+
+    sheen = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    sheen_draw = ImageDraw.Draw(sheen)
+    edge_width = max(2, int(size * 0.055))
+    sheen_draw.arc(
+        outer_bounds,
+        start=205,
+        end=335,
+        fill=(255, 255, 255, 72),
+        width=edge_width,
+    )
+    sheen_draw.arc(
+        outer_bounds,
+        start=20,
+        end=145,
+        fill=(8, 12, 18, 58),
+        width=edge_width,
+    )
+    image = Image.alpha_composite(image, sheen)
+    draw = ImageDraw.Draw(image)
+
+    processing = activity in {
+        TRAY_ACTIVITY_TRANSCRIBING,
+        TRAY_ACTIVITY_POST_PROCESSING,
+    }
+    if not processing:
+        inset = int(size * 0.29)
+        radius = max(2, int(size * 0.045))
+        draw.rounded_rectangle(
+            (inset, inset, size - inset, size - inset),
+            radius=radius,
+            fill=(255, 255, 255, 255),
         )
-        ring_inset = int(size * 0.08)
-        ring_width = max(4, int(size * 0.12))
-        draw.arc(
-            (ring_inset, ring_inset, size - ring_inset, size - ring_inset),
-            start=0,
-            end=359,
-            fill=(255, 244, 214, 120),
-            width=ring_width,
-        )
-        bar_left = int(size * 0.3)
-        bar_right = int(size * 0.7)
-        for y in (int(size * 0.36), int(size * 0.5), int(size * 0.64)):
+        return image
+
+    inner_inset = int(size * 0.225)
+    draw.ellipse(
+        (inner_inset, inner_inset, size - inner_inset, size - inner_inset),
+        fill=(25, 29, 35, 255),
+    )
+    ring_inset = int(size * 0.075)
+    ring_width = max(4, int(size * 0.105))
+    step = spinner_step or 0
+    step_degrees = 360 / TRAY_SPINNER_STEPS
+    start_angle = int((step % TRAY_SPINNER_STEPS) * step_degrees)
+
+    orbit = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    orbit_draw = ImageDraw.Draw(orbit)
+    ring_bounds = (ring_inset, ring_inset, size - ring_inset, size - ring_inset)
+    orbit_draw.arc(
+        ring_bounds,
+        start=0,
+        end=359,
+        fill=(255, 255, 255, 58),
+        width=ring_width,
+    )
+    orbit_draw.arc(
+        ring_bounds,
+        start=start_angle - 48,
+        end=start_angle + 8,
+        fill=(255, 255, 255, 128),
+        width=ring_width,
+    )
+    orbit_draw.arc(
+        ring_bounds,
+        start=start_angle,
+        end=start_angle + TRAY_SPINNER_SWEEP_DEG,
+        fill=(255, 255, 255, 248),
+        width=ring_width,
+    )
+    image = Image.alpha_composite(image, orbit)
+    draw = ImageDraw.Draw(image)
+
+    if activity == TRAY_ACTIVITY_TRANSCRIBING:
+        patterns = ((12, 22, 16), (18, 13, 23), (23, 17, 12), (16, 23, 18))
+        heights = patterns[(step // 2) % len(patterns)]
+        bar_width = max(4, int(size * 0.075))
+        gap = max(3, int(size * 0.06))
+        total_width = bar_width * 3 + gap * 2
+        left = (size - total_width) // 2
+        center_y = size // 2
+        for index, height in enumerate(heights):
+            x = left + index * (bar_width + gap)
             draw.rounded_rectangle(
-                (bar_left, y - 2, bar_right, y + 2),
-                radius=2,
-                fill=(255, 244, 214, 255),
+                (x, center_y - height // 2, x + bar_width, center_y + height // 2),
+                radius=bar_width // 2,
+                fill=(255, 248, 229, 255),
             )
     else:
-        draw.rectangle((inset, inset, size - inset, size - inset), fill=(255, 255, 255, 255))
-    if spinner_step is not None:
-        ring_inset = int(size * 0.08)
-        ring_width = max(4, int(size * 0.12))
-        step_degrees = 360 / TRAY_SPINNER_STEPS
-        start_angle = int((spinner_step % TRAY_SPINNER_STEPS) * step_degrees)
-        draw.arc(
-            (ring_inset, ring_inset, size - ring_inset, size - ring_inset),
-            start=start_angle,
-            end=start_angle + TRAY_SPINNER_SWEEP_DEG,
-            fill=(255, 255, 255, 255),
-            width=ring_width,
+        center = size // 2
+        outer = int(size * (0.17 if step % 4 in (1, 2) else 0.155))
+        inner = max(3, int(size * 0.052))
+        draw.polygon(
+            (
+                (center, center - outer),
+                (center + inner, center - inner),
+                (center + outer, center),
+                (center + inner, center + inner),
+                (center, center + outer),
+                (center - inner, center + inner),
+                (center - outer, center),
+                (center - inner, center - inner),
+            ),
+            fill=(255, 248, 255, 255),
         )
     return image
 
@@ -3762,7 +3873,8 @@ def tray_animation_loop() -> None:
         if (is_transcribing or is_post_processing) and not is_listening:
             with state.lock:
                 state.tray_spinner_step = (state.tray_spinner_step + 1) % TRAY_SPINNER_STEPS
-            update_tray_icon()
+            with tray_ui_lock:
+                update_tray_icon()
             time.sleep(TRAY_SPINNER_INTERVAL_S)
             continue
 
@@ -3771,9 +3883,10 @@ def tray_animation_loop() -> None:
             if state.tray_spinner_step != 0:
                 state.tray_spinner_step = 0
                 should_refresh = True
-        if should_refresh:
-            update_tray_icon()
-        time.sleep(0.1)
+        if should_refresh or tray_color_transition_pending():
+            with tray_ui_lock:
+                update_tray_icon()
+        time.sleep(TRAY_IDLE_INTERVAL_S)
 
 
 def start_tray_animation_loop() -> None:
@@ -3785,9 +3898,9 @@ def start_tray_animation_loop() -> None:
 
 
 def tray_setup(_icon: TrayIconLike) -> None:
-    global tray_icon_key, tray_status_signature
+    global tray_status_signature
     _icon.visible = True  # required when using a custom setup callback
-    tray_icon_key = None
+    reset_tray_visual_state()
     tray_status_signature = None
     enforce_transcription_engine_dependencies()
     start_transcription_warmup()
@@ -3811,11 +3924,11 @@ def tray_setup(_icon: TrayIconLike) -> None:
 
 
 def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
-    global tray_icon_key, tray_status_signature
+    global tray_status_signature
     shutdown_event.set()
     stop_input_listeners()
     stop_transcript_browser()
-    tray_icon_key = None
+    reset_tray_visual_state()
     tray_status_signature = None
     if icon is None:
         return

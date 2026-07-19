@@ -48,7 +48,7 @@ class FakeThread:
 def reset_app_state(monkeypatch, tmp_path: Path):
     app.state = app.SessionState()
     app.tray_icon = None
-    app.tray_icon_key = None
+    app.reset_tray_visual_state()
     app.tray_status_signature = None
     app.keyboard_listener = None
     app.transcript_browser_server = None
@@ -1145,6 +1145,39 @@ def test_update_tray_icon_uses_animated_post_processing_color(monkeypatch):
     assert app.tray_icon.icon == "icon"
 
 
+def test_update_tray_icon_uses_target_dominant_two_frame_color_transition(monkeypatch):
+    app.tray_icon = FakeTrayIcon()
+    colors = []
+    monkeypatch.setattr(app, "APPINDICATOR_BACKEND", False)
+    monkeypatch.setattr(
+        app,
+        "create_tray_icon_image",
+        lambda **kwargs: colors.append(kwargs["color"]) or "icon",
+    )
+
+    app.update_tray_icon()
+    with app.state.lock:
+        app.state.is_listening = True
+    app.update_tray_icon()
+    app.update_tray_icon()
+    app.update_tray_icon()
+
+    assert colors == [
+        app.TRAY_COLOR_READY,
+        app.blend_tray_colors(
+            app.TRAY_COLOR_READY,
+            app.TRAY_COLOR_LISTENING,
+            app.TRAY_TRANSITION_BLEND[0],
+        ),
+        app.blend_tray_colors(
+            app.TRAY_COLOR_READY,
+            app.TRAY_COLOR_LISTENING,
+            app.TRAY_TRANSITION_BLEND[1],
+        ),
+        app.TRAY_COLOR_LISTENING,
+    ]
+
+
 def test_update_tray_icon_skips_spinner_on_appindicator(monkeypatch):
     app.tray_icon = FakeTrayIcon()
     monkeypatch.setattr(app, "APPINDICATOR_BACKEND", True)
@@ -1155,7 +1188,11 @@ def test_update_tray_icon_skips_spinner_on_appindicator(monkeypatch):
     app.update_tray_icon()
 
     assert app.tray_icon.icon is None
-    assert app.tray_icon_key == (app.TRAY_COLOR_TRANSCRIBING, None)
+    assert app.tray_icon_key == (
+        app.TRAY_COLOR_TRANSCRIBING,
+        None,
+        app.TRAY_ACTIVITY_TRANSCRIBING,
+    )
 
 
 def test_update_tray_icon_marks_post_processing_on_appindicator(monkeypatch):
@@ -1169,7 +1206,11 @@ def test_update_tray_icon_marks_post_processing_on_appindicator(monkeypatch):
     app.update_tray_icon()
 
     assert app.tray_icon.icon is None
-    assert app.tray_icon_key == (app.TRAY_COLOR_POST_PROCESSING, None)
+    assert app.tray_icon_key == (
+        app.TRAY_COLOR_POST_PROCESSING,
+        None,
+        app.TRAY_ACTIVITY_POST_PROCESSING,
+    )
 
 
 def test_update_tray_icon_marks_system_audio_on_appindicator(monkeypatch):
@@ -1182,7 +1223,11 @@ def test_update_tray_icon_marks_system_audio_on_appindicator(monkeypatch):
     app.update_tray_icon()
 
     assert app.tray_icon.icon is None
-    assert app.tray_icon_key == (app.TRAY_COLOR_SYSTEM_AUDIO_LISTENING, None)
+    assert app.tray_icon_key == (
+        app.TRAY_COLOR_SYSTEM_AUDIO_LISTENING,
+        None,
+        app.TRAY_ACTIVITY_LISTENING,
+    )
 
 
 def test_update_tray_icon_skips_redundant_redraw(monkeypatch):
@@ -1232,7 +1277,11 @@ def test_update_tray_status_skips_runtime_ui_on_appindicator(monkeypatch):
 
     assert app.tray_icon.title == "before"
     assert app.tray_icon.icon is None
-    assert app.tray_icon_key == (app.TRAY_COLOR_TRANSCRIBING, None)
+    assert app.tray_icon_key == (
+        app.TRAY_COLOR_TRANSCRIBING,
+        None,
+        app.TRAY_ACTIVITY_TRANSCRIBING,
+    )
 
 
 def test_log_writes_timestamped_message_to_file(tmp_path: Path, monkeypatch):
@@ -1786,6 +1835,28 @@ def test_create_tray_icon_image_returns_requested_size():
     image = app.create_tray_icon_image(size=32, color=(1, 2, 3, 255))
 
     assert image.size == (32, 32)
+
+
+def test_create_tray_icon_image_distinguishes_activity_and_animation_frames():
+    transcribing_start = app.create_tray_icon_image(
+        color=app.TRAY_COLOR_TRANSCRIBING,
+        spinner_step=0,
+        activity=app.TRAY_ACTIVITY_TRANSCRIBING,
+    )
+    transcribing_next = app.create_tray_icon_image(
+        color=app.TRAY_COLOR_TRANSCRIBING,
+        spinner_step=4,
+        activity=app.TRAY_ACTIVITY_TRANSCRIBING,
+    )
+    post_processing = app.create_tray_icon_image(
+        color=app.TRAY_COLOR_POST_PROCESSING,
+        spinner_step=0,
+        activity=app.TRAY_ACTIVITY_POST_PROCESSING,
+    )
+
+    assert transcribing_start.tobytes() != transcribing_next.tobytes()
+    assert transcribing_start.tobytes() != post_processing.tobytes()
+    assert transcribing_start.getpixel((32, 32))[3] == 255
 
 
 def test_tray_setup_marks_icon_visible_and_starts_listener(monkeypatch):

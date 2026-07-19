@@ -58,7 +58,7 @@ CI now runs:
   - Keyboard and mouse hotkey press/release transitions, double-tap work-log handling, and toggle mode stop behavior.
   - First-press startup race handling: a release that arrives while a session is still starting is remembered and stops the new recording cleanly.
   - Persisted dictation hotkey kind/tokens, conservative Whisper recorded-model default, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, flattened menu hierarchy and bounded active-value labels, tray startup/shutdown, and `main()` bootstrap wiring.
-  - GPT post-processing model/profile persistence, tray controls, custom instruction loading, Responses API payloads, blank-input handling, raw-transcript fallback on API failure, reference-counted processing state, and distinct tray feedback.
+  - GPT post-processing model/profile persistence, tray controls, custom instruction loading, Responses API payloads, blank-input handling, raw-transcript fallback on API failure, reference-counted processing state, target-dominant color transitions, and distinct activity animation frames.
   - Always-on SQLite transcript storage, raw-before-GPT ordering, finalization and failure status, search, deletion, HTML escaping, loopback browser requests, deletion-token validation, and browser shutdown.
   - Single-instance startup guard, hotkey-listener watchdog restart, and delayed restart helper behavior.
 
@@ -237,6 +237,7 @@ CI now runs:
 - Dictate a sentence with filler words or a false start, then release the hotkey.
 - Expected: the final pasted text is revised according to the selected instructions; the recording behavior is unchanged.
 - Expected: after orange transcription begins, the tray icon changes to an animated magenta while GPT revises the text, then returns to green when output finishes. The tooltip says `Post-processing` when tooltips are enabled.
+- Expected: each color change is recognizable on its first frame and settles smoothly within the next two frames; orange shows a moving waveform and magenta shows a subtly pulsing sparkle inside the orbit.
 - Switch to `Custom instructions`, open the custom instructions file, add a small rule such as preserving a product name exactly, save it, and dictate again.
 - Expected: the next result uses the edited instruction without restarting the tray app.
 - Temporarily disconnect the network and dictate again.
