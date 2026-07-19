@@ -57,7 +57,7 @@ CI now runs:
   - Clipboard paste flow, work-log append behavior, and tray status updates.
   - Keyboard and mouse hotkey press/release transitions, double-tap work-log handling, and toggle mode stop behavior.
   - First-press startup race handling: a release that arrives while a session is still starting is remembered and stops the new recording cleanly.
-  - Persisted dictation hotkey kind/tokens, conservative Whisper recorded-model default, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, menu builders, tray startup/shutdown, and `main()` bootstrap wiring.
+  - Persisted dictation hotkey kind/tokens, conservative Whisper recorded-model default, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, flattened menu hierarchy and bounded active-value labels, tray startup/shutdown, and `main()` bootstrap wiring.
   - GPT post-processing model/profile persistence, tray controls, custom instruction loading, Responses API payloads, blank-input handling, raw-transcript fallback on API failure, reference-counted processing state, and distinct tray feedback.
   - Always-on SQLite transcript storage, raw-before-GPT ordering, finalization and failure status, search, deletion, HTML escaping, loopback browser requests, deletion-token validation, and browser shutdown.
   - Single-instance startup guard, hotkey-listener watchdog restart, and delayed restart helper behavior.
@@ -150,19 +150,19 @@ CI now runs:
 - After a fresh Windows login, wait at least 90 seconds and then press F13 once. Expected: the service has rebound the listener after startup and dictation begins without manually restarting the tray.
 
 3) Set Hotkey dialog
-- Open the tray menu, click `Settings` -> `Set dictation hotkey...`, press a key or combo, confirm the drafted label looks right, then click `Accept`.
+- Open the tray menu, click `Dictation hotkey: <current>...`, press a key or combo, confirm the drafted label looks right, then click `Accept`.
 - Expected: the tray menu immediately shows the new dictation hotkey.
 - Expected: the hotkey only starts dictation when the drafted keys are the only keys being held, except for `Shift + hotkey` system-audio capture.
 
 4) Realtime live typing (GPT-4o Realtime)
-- In tray menu, set "Settings" -> "Transcription mode" -> "GPT-4o Realtime".
+- In the tray menu, open `Transcription mode: <current>` and select `GPT-4o Realtime`.
 - Hold the mouse button remapped to F13 and speak 1-2 sentences.
 - Expected: text starts appearing before key release; releasing F13 finalizes punctuation/suffix.
 - Expected: realtime behavior is server-side; no local chunking fallback should appear in logs.
 - Expected: no `invalid_model` websocket errors when using the default realtime websocket URL.
 
 5) Shared input device menu
-- Open the tray menu, choose `Settings` -> `Input device`, then select a different microphone/input.
+- Open the tray menu, choose `Input device: <current>`, then select a different microphone/input.
 - Expected: both normal dictation and work-log capture switch to the same selected device.
 
 6) System audio dictation
@@ -186,14 +186,14 @@ CI now runs:
 
 9) Punctuation toggles
 - Toggle "Ensure terminal punctuation", "Capitalize first letter", and
-  "Normalize whitespace" from `Settings` -> `Punctuation`.
+  "Normalize whitespace" from `Text output`.
 - Expected: dictation + work log reflect the settings on the next run.
 
 10) Transcription mode and recorded model toggles
-- In tray menu, switch "Settings" -> "Transcription mode" between Record then paste and GPT-4o Realtime.
+- In the tray menu, use `Transcription mode: <current>` to switch between Record then paste and GPT-4o Realtime.
 - Expected: selected radio item updates immediately and next dictation uses that engine.
 - Expected: when GPT-4o Realtime is active, there is no automatic Whisper fallback.
-- In tray menu, switch "Settings" -> "Recorded model" between GPT-4o Transcribe, GPT-4o Mini Transcribe, and Whisper.
+- In the tray menu, use `Recorded model: <current>` to switch between GPT-4o Transcribe, GPT-4o Mini Transcribe, and Whisper.
 - Expected: next record-then-paste dictation uses the selected recorded model.
 
 11) Engine preference persistence
@@ -207,14 +207,14 @@ CI now runs:
 13) Transcript history (default on)
 - Dictate once with the normal dictation hotkey, then open the history file from the tray.
 - Expected: a new line is appended with a full date/time stamp and a `[Dictation]` tag.
-- In `Settings`, toggle `Save transcript history` off, dictate again, and confirm no new dictation history line is added.
+- In `More settings`, toggle `Save legacy transcript history` off, dictate again, and confirm no new dictation history line is added.
 
 14) Work log hotkey (F14 by default)
 - Hold F14 for at least ~0.25s, speak a short sentence, release.
 - Expected: a new timestamped line appears in `work_log.txt` with a `[Work log]` tag.
 
 15) Mute monitor (optional)
-- Enable "Mute monitor", then start recording while silent.
+- Enable `More settings` -> `Mute monitor`, then start recording while silent.
 - Expected: after ~1.5s, a "Muted?" hint appears in the console/tray tooltip.
 
 16) Device hot-swap fallback
@@ -233,7 +233,7 @@ CI now runs:
 
 19) GPT transcript post-processing
 
-- Open `Settings` -> `GPT post-processing`, select `Clean up speech`, choose a model, and enable it.
+- Select `Clean up speech` from `GPT instructions: <current>`, choose a model from `GPT model: <current>`, and enable the root `GPT post-processing` checkbox.
 - Dictate a sentence with filler words or a false start, then release the hotkey.
 - Expected: the final pasted text is revised according to the selected instructions; the recording behavior is unchanged.
 - Expected: after orange transcription begins, the tray icon changes to an animated magenta while GPT revises the text, then returns to green when output finishes. The tooltip says `Post-processing` when tooltips are enabled.
@@ -252,11 +252,11 @@ CI now runs:
 - Expected: matching entries remain visible.
 - Delete one entry.
 - Expected: it disappears after the redirect and remains gone after closing and reopening the browser.
-- Disable `Save transcript history`, dictate again, and reopen the browser.
+- Disable `More settings` -> `Save legacy transcript history`, dictate again, and reopen the browser.
 - Expected: the new raw/final entry is still archived because the toggle controls only `work_log.txt`.
 
 21) Run on startup toggle
-- Open `Settings` -> `Run at login`.
+- Open `More settings` -> `Run at login`.
 - Expected on Linux: a user systemd service is written/enabled for the current checkout and starts immediately.
 - Expected on Windows/macOS: the platform startup artifact is created for the current checkout.
 - Toggle it off again.
@@ -284,8 +284,9 @@ CI now runs:
 25) Ubuntu tray interactivity
 - On Ubuntu GNOME/Wayland, launch the app from `python start_push_to_talk.py`.
 - Left-click or right-click the tray icon.
-- Expected: the tray menu opens and actions such as `Settings`, `Restart service`, and `Quit` are clickable.
-- Expected: there are no preset entries such as `Default (no frills)` or `Bells and whistles`; individual toggles remain under `Settings` -> `Advanced`.
+- Expected: the tray menu opens and root actions such as `GPT post-processing`, `Tap to start / stop`, `Restart service`, and `Quit` are clickable.
+- Expected: the active input, transcription mode, recorded model, GPT model, and GPT instructions appear in their submenu labels.
+- Expected: common actions take one click and selectors take two; low-frequency toggles remain available under `More settings`.
 
 26) Runtime logging
 - Use dictation once, then inspect `push_to_talk_realtime.log`.

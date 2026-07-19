@@ -4,7 +4,7 @@ Push-to-talk Transcription
 Hold a hotkey to record from your microphone, transcribe audio, and paste
 the transcript into the active window. A second hotkey logs dictations as
 timestamped work entries. The app runs from a compact system tray menu with a
-small Settings submenu for less common controls.
+flat set of common controls and one submenu for less common preferences.
 
 This repository is standalone. It does not depend on Personal Package Manager,
 although external launchers can still start it by pointing at this checkout.
@@ -24,7 +24,7 @@ Features
 - Realtime live dictation: GPT-4o Realtime streams server-side transcript deltas while you are still holding the hotkey.
 - Transcription preferences are saved and restored on next launch.
 - GPT post-processing is off by default and falls back to the original transcript if the additional API call fails or returns no text.
-- Tray controls: `Settings`, `Open transcript browser`, `Open transcript history`, `Restart service`, and `Quit`.
+- Tray controls expose common toggles and active selections directly, alongside transcript browsing, restart, and quit actions.
 - Busy tray feedback: non-AppIndicator backends update the tray icon live; recording from the microphone is red, system-audio recording is blue, transcription is orange, and GPT post-processing is an animated magenta. Ubuntu AppIndicator stays on a static icon for stability and writes status changes to the app log.
 - Single-instance guard: accidental duplicate launches exit before installing a second global hotkey listener.
 - Startup hardening: the ready message is logged only after the global hotkey listener starts, and a watchdog restarts the listener if it stops unexpectedly.
@@ -48,14 +48,19 @@ Hotkeys
 
 Tray Menu
 ---------
-- Settings: shortcuts, model, mode, input device, punctuation, startup, transcript history, and advanced toggles.
+- GPT post-processing: one-click checkbox for the additional text-revision call.
+- Tap to start / stop: one-click alternative to hold-to-record.
+- Input device, transcription mode, recorded model, GPT model, and GPT instructions are direct submenus. Each label shows the active selection.
+- Text output: paste suffix and punctuation behavior.
+- Dictation hotkey: shows the current binding and opens the capture dialog directly.
+- More settings: work-log hotkey, startup, legacy transcript history, beeps, status tooltip, and mute monitor.
 - Open transcript browser: starts a private `127.0.0.1` web interface and opens it in the default browser. Raw and final text appear side by side, with search and per-entry deletion.
 - Open transcript history: opens `work_log.txt`.
 - Restart service: restarts the systemd user service when managed by systemd, otherwise waits for the current tray instance to exit before relaunching the tracked entry point.
 - Quit: exits the tray app, or stops the systemd user service when managed by systemd.
 
-Settings includes:
-- Set dictation hotkey...: opens a small capture window, shows the drafted key combo, then saves it only after you click `Accept`.
+Controls:
+- Dictation hotkey: opens a small capture window, shows the drafted key combo, then saves it only after you click `Accept`.
 - Recorded model:
   - Whisper: default recorded model for the original conservative boot-time behavior.
   - GPT-4o Transcribe: optional quality/latency trade-off for the record-then-paste path.
@@ -63,21 +68,21 @@ Settings includes:
 - Transcription mode:
   - Record then paste: transcribes after key release and preserves the original clipboard/paste workflow.
   - GPT-4o Realtime: strict server-side websocket transcription with server VAD; streams deltas while recording, then finalizes on release.
-- GPT post-processing:
-  - Enabled: turns the additional text-revision call on or off immediately. It is off by default.
+- GPT post-processing is a root checkbox that turns the additional text-revision call on or off immediately. It is off by default.
+- GPT model and instructions:
   - Model: choose GPT-5.6 Luna (fast), Terra (balanced), or Sol (highest quality).
   - Instructions: choose Clean up speech, Make concise, Light touch, or Custom instructions.
-  - Open custom instructions...: opens the local `post_process_instructions.txt` file. The app creates it on first use and rereads it for every custom-profile request, so edits do not require a restart.
+  - Edit custom instructions...: appears in the instructions submenu and opens the local `post_process_instructions.txt` file. The app creates it on first use and rereads it for every custom-profile request, so edits do not require a restart.
   - Applies to both pasted dictation and work-log entries. If post-processing is enabled with GPT-4o Realtime, live typing is withheld until the revised final text is ready.
-- Punctuation:
+- Text output:
   - Suffix: None / Space / Newline (affects pasted dictation only).
   - Ensure terminal punctuation (adds "." if missing; enabled by default).
   - Capitalize first letter.
   - Normalize whitespace.
-- Run at login: installs or removes the platform startup hook for the current checkout.
-- Save transcript history: on by default; when enabled, each final dictation is appended to `work_log.txt`.
+- More settings -> Run at login: installs or removes the platform startup hook for the current checkout.
+- More settings -> Save legacy transcript history: on by default; when enabled, each final dictation is appended to `work_log.txt`.
   This controls only the legacy text file; the raw/final SQLite archive remains always on.
-- Advanced: toggle mode, beeps, status tooltip, mute monitor, and refresh audio devices.
+- Refresh devices appears at the bottom of the Input device submenu.
 
 Setup
 -----
@@ -118,7 +123,7 @@ For debugging, run the same script with `--foreground`.
 
 Run on startup
 --------------
-The easiest path is the tray menu: open `Settings` -> `Run at login`.
+The easiest path is the tray menu: open `More settings` -> `Run at login`.
 
 That toggle writes the right startup hook for the current platform:
 - Linux: a user systemd service in `~/.config/systemd/user/`
@@ -215,8 +220,8 @@ Use the tray menu to switch input devices on the fly. For scripted setup, set
 `DICTATION_DEVICE` is unset. On Windows, `Shift + DICTATION_HOTKEY` captures the
 default output device through WASAPI loopback. Set `SYSTEM_AUDIO_DEVICE` to a
 headphones/speakers name fragment to target a specific output, or to a Stereo
-Mix-style input name/index if loopback is unavailable. The menu also includes a
-"Refresh audio devices" option. If a selected device
+Mix-style input name/index if loopback is unavailable. The input-device submenu
+also includes `Refresh devices`. If a selected device
 disappears (for example, USB unplug/replug), the app retries and falls back to
 another available input instead of crashing. Reselect the desired device after
 it reconnects.

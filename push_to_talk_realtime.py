@@ -3423,6 +3423,12 @@ def build_input_device_menu() -> pystray.Menu:
                 checked=lambda _item, idx=idx: is_input_device_selected(idx),
             )
         )
+    items.extend(
+        (
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Refresh devices", refresh_audio_devices),
+        )
+    )
     return pystray.Menu(*items)
 
 
@@ -3515,7 +3521,7 @@ def make_post_process_instruction_checked(profile: str):
 
 def build_post_process_instruction_menu() -> pystray.Menu:
     profile_names = (*POST_PROCESS_INSTRUCTION_PROFILES, "custom")
-    return pystray.Menu(
+    items = [
         *[
             pystray.MenuItem(
                 POST_PROCESS_INSTRUCTION_LABELS[profile],
@@ -3524,20 +3530,80 @@ def build_post_process_instruction_menu() -> pystray.Menu:
                 checked=make_post_process_instruction_checked(profile),
             )
             for profile in profile_names
-        ]
-    )
+        ],
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Edit custom instructions...", open_custom_post_process_instructions),
+    ]
+    return pystray.Menu(*items)
 
 
-def build_post_processing_menu() -> pystray.Menu:
+def current_input_device_label() -> str:
+    with state.lock:
+        label = state.dictation_device_label or DEFAULT_DEVICE_LABEL
+    return compact_menu_value(label)
+
+
+def compact_menu_value(value: str, max_length: int = 42) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= max_length:
+        return normalized
+    return f"{normalized[: max_length - 3].rstrip()}..."
+
+
+def current_transcription_mode_label() -> str:
+    with state.lock:
+        engine = state.transcription_engine
+    if engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
+        return "GPT-4o Realtime"
+    return "Record then paste"
+
+
+def current_recorded_model_label() -> str:
+    with state.lock:
+        model = state.recorded_transcription_model
+    return recorded_transcription_model_label(model)
+
+
+def current_post_process_model_label() -> str:
+    with state.lock:
+        model = state.post_process_model
+    return post_process_model_label(model)
+
+
+def current_post_process_instruction_label() -> str:
+    with state.lock:
+        profile = state.post_process_instruction_profile
+    return POST_PROCESS_INSTRUCTION_LABELS.get(profile, profile)
+
+
+def build_more_settings_menu() -> pystray.Menu:
     return pystray.Menu(
+        pystray.MenuItem(f"Work log hotkey: {HOTKEY_WORKLOG}", None, enabled=False),
         pystray.MenuItem(
-            "Enabled",
-            toggle_post_processing,
-            checked=lambda _item: state.post_processing_enabled,
+            "Run at login",
+            toggle_run_on_startup,
+            checked=lambda _item: is_run_on_startup_enabled(),
         ),
-        pystray.MenuItem("Model", build_post_process_model_menu()),
-        pystray.MenuItem("Instructions", build_post_process_instruction_menu()),
-        pystray.MenuItem("Open custom instructions...", open_custom_post_process_instructions),
+        pystray.MenuItem(
+            "Save legacy transcript history",
+            toggle_dictation_history,
+            checked=lambda _item: state.dictation_history_enabled,
+        ),
+        pystray.MenuItem(
+            "Beeps",
+            toggle_beeps,
+            checked=lambda _item: state.beeps_enabled,
+        ),
+        pystray.MenuItem(
+            "Status tooltip",
+            toggle_tooltip,
+            checked=lambda _item: state.tooltip_enabled,
+        ),
+        pystray.MenuItem(
+            "Mute monitor",
+            toggle_monitor,
+            checked=lambda _item: state.monitor_enabled,
+        ),
     )
 
 
@@ -3579,96 +3645,50 @@ def build_punctuation_menu() -> pystray.Menu:
     )
 
 
-def build_options_menu() -> pystray.Menu:
-    return pystray.Menu(
-        pystray.MenuItem(
-            "Save transcript history",
-            toggle_dictation_history,
-            checked=lambda _item: state.dictation_history_enabled,
-        ),
-        pystray.MenuItem(
-            "Run on startup",
-            toggle_run_on_startup,
-            checked=lambda _item: is_run_on_startup_enabled(),
-        ),
-        pystray.MenuItem(
-            "Toggle mode (tap to start/stop)",
-            toggle_toggle_mode,
-            checked=lambda _item: state.toggle_mode_enabled,
-        ),
-        pystray.MenuItem(
-            "Beeps",
-            toggle_beeps,
-            checked=lambda _item: state.beeps_enabled,
-        ),
-        pystray.MenuItem(
-            "Status tooltip",
-            toggle_tooltip,
-            checked=lambda _item: state.tooltip_enabled,
-        ),
-        pystray.MenuItem(
-            "Mute monitor",
-            toggle_monitor,
-            checked=lambda _item: state.monitor_enabled,
-        ),
-    )
-
-
-def build_advanced_settings_menu() -> pystray.Menu:
-    return pystray.Menu(
-        pystray.MenuItem(
-            "Toggle mode",
-            toggle_toggle_mode,
-            checked=lambda _item: state.toggle_mode_enabled,
-        ),
-        pystray.MenuItem(
-            "Beeps",
-            toggle_beeps,
-            checked=lambda _item: state.beeps_enabled,
-        ),
-        pystray.MenuItem(
-            "Status tooltip",
-            toggle_tooltip,
-            checked=lambda _item: state.tooltip_enabled,
-        ),
-        pystray.MenuItem(
-            "Mute monitor",
-            toggle_monitor,
-            checked=lambda _item: state.monitor_enabled,
-        ),
-        pystray.MenuItem("Refresh audio devices", refresh_audio_devices),
-    )
-
-
-def build_settings_menu() -> pystray.Menu:
-    return pystray.Menu(
-        pystray.MenuItem(f"Dictation hotkey: {dictation_hotkey_summary()}", None, enabled=False),
-        pystray.MenuItem(f"Work log hotkey: {HOTKEY_WORKLOG}", None, enabled=False),
-        pystray.MenuItem("Set dictation hotkey...", prompt_for_hotkey),
-        pystray.MenuItem("Recorded model", build_recorded_transcription_model_menu()),
-        pystray.MenuItem("Transcription mode", build_transcription_menu()),
-        pystray.MenuItem("GPT post-processing", build_post_processing_menu()),
-        pystray.MenuItem("Input device", build_input_device_menu()),
-        pystray.MenuItem("Punctuation", build_punctuation_menu()),
-        pystray.MenuItem(
-            "Run at login",
-            toggle_run_on_startup,
-            checked=lambda _item: is_run_on_startup_enabled(),
-        ),
-        pystray.MenuItem(
-            "Save transcript history",
-            toggle_dictation_history,
-            checked=lambda _item: state.dictation_history_enabled,
-        ),
-        pystray.MenuItem("Advanced", build_advanced_settings_menu()),
-    )
-
-
 def build_menu() -> pystray.Menu:
     return pystray.Menu(
-        pystray.MenuItem("Settings", build_settings_menu()),
+        pystray.MenuItem(
+            "GPT post-processing",
+            toggle_post_processing,
+            checked=lambda _item: state.post_processing_enabled,
+        ),
+        pystray.MenuItem(
+            "Tap to start / stop",
+            toggle_toggle_mode,
+            checked=lambda _item: state.toggle_mode_enabled,
+        ),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem(
+            f"Input device: {current_input_device_label()}",
+            build_input_device_menu(),
+        ),
+        pystray.MenuItem(
+            f"Transcription mode: {current_transcription_mode_label()}",
+            build_transcription_menu(),
+        ),
+        pystray.MenuItem(
+            f"Recorded model: {current_recorded_model_label()}",
+            build_recorded_transcription_model_menu(),
+        ),
+        pystray.MenuItem(
+            f"GPT model: {current_post_process_model_label()}",
+            build_post_process_model_menu(),
+        ),
+        pystray.MenuItem(
+            f"GPT instructions: {current_post_process_instruction_label()}",
+            build_post_process_instruction_menu(),
+        ),
+        pystray.MenuItem("Text output", build_punctuation_menu()),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem(
+            f"Dictation hotkey: {compact_menu_value(dictation_hotkey_summary(), 28)}...",
+            prompt_for_hotkey,
+        ),
+        pystray.MenuItem("More settings", build_more_settings_menu()),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem("Open transcript browser", open_transcript_browser),
         pystray.MenuItem("Open transcript history", open_work_log),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem("Restart service", restart_app),
         pystray.MenuItem("Quit", quit_app),
     )

@@ -709,17 +709,10 @@ def test_post_process_transcript_skips_api_for_blank_text(monkeypatch):
     assert app.post_process_transcript("  ", "gpt-5.6-luna", "Clean up.") == ""
 
 
-def test_post_processing_menu_lists_models_instructions_and_toggle():
-    menu = app.build_post_processing_menu()
+def test_post_processing_menus_list_models_instructions_and_custom_editor():
     model_menu = app.build_post_process_model_menu()
     instruction_menu = app.build_post_process_instruction_menu()
 
-    assert [item.text for item in menu] == [
-        "Enabled",
-        "Model",
-        "Instructions",
-        "Open custom instructions...",
-    ]
     assert [item.text for item in model_menu] == [
         "GPT-5.6 Luna (fast)",
         "GPT-5.6 Terra (balanced)",
@@ -730,6 +723,8 @@ def test_post_processing_menu_lists_models_instructions_and_toggle():
         "Make concise",
         "Light touch",
         "Custom instructions",
+        "- - - -",
+        "Edit custom instructions...",
     ]
 
 
@@ -1639,19 +1634,28 @@ def test_make_device_action_selects_device(monkeypatch):
     assert calls == [(2, "USB Mic")]
 
 
+def test_compact_menu_value_preserves_short_values_and_bounds_long_ones():
+    assert app.compact_menu_value(" USB   Microphone ") == "USB Microphone"
+    assert app.compact_menu_value("A very long device label", 16) == "A very long d..."
+
+
 def test_menu_builders_include_expected_top_level_items(monkeypatch):
     app.DEVICE_LIST = [(2, "USB Mic")]
 
     punctuation_menu = app.build_punctuation_menu()
-    advanced_menu = app.build_advanced_settings_menu()
+    more_settings_menu = app.build_more_settings_menu()
     monkeypatch.setattr(app, "build_input_device_menu", lambda: "device")
     monkeypatch.setattr(app, "build_recorded_transcription_model_menu", lambda: "models")
     monkeypatch.setattr(app, "build_transcription_menu", lambda: "mode")
-    monkeypatch.setattr(app, "build_post_processing_menu", lambda: "post-processing")
+    monkeypatch.setattr(app, "build_post_process_model_menu", lambda: "gpt-models")
+    monkeypatch.setattr(app, "build_post_process_instruction_menu", lambda: "instructions")
     monkeypatch.setattr(app, "build_punctuation_menu", lambda: "punctuation")
-    monkeypatch.setattr(app, "build_advanced_settings_menu", lambda: "advanced")
-    settings_menu = app.build_settings_menu()
-    monkeypatch.setattr(app, "build_settings_menu", lambda: "settings")
+    monkeypatch.setattr(app, "build_more_settings_menu", lambda: "more")
+    monkeypatch.setattr(app, "current_input_device_label", lambda: "USB Mic")
+    monkeypatch.setattr(app, "current_transcription_mode_label", lambda: "Record then paste")
+    monkeypatch.setattr(app, "current_recorded_model_label", lambda: "GPT-4o Mini Transcribe")
+    monkeypatch.setattr(app, "current_post_process_model_label", lambda: "GPT-5.6 Luna (fast)")
+    monkeypatch.setattr(app, "current_post_process_instruction_label", lambda: "Clean up speech")
     menu = app.build_menu()
 
     assert [item.text for item in punctuation_menu] == [
@@ -1662,30 +1666,31 @@ def test_menu_builders_include_expected_top_level_items(monkeypatch):
         "Capitalize first letter",
         "Normalize whitespace",
     ]
-    assert [item.text for item in advanced_menu] == [
-        "Toggle mode",
+    assert [item.text for item in more_settings_menu] == [
+        f"Work log hotkey: {app.HOTKEY_WORKLOG}",
+        "Run at login",
+        "Save legacy transcript history",
         "Beeps",
         "Status tooltip",
         "Mute monitor",
-        "Refresh audio devices",
-    ]
-    assert [item.text for item in settings_menu] == [
-        f"Dictation hotkey: {app.dictation_hotkey_summary()}",
-        f"Work log hotkey: {app.HOTKEY_WORKLOG}",
-        "Set dictation hotkey...",
-        "Recorded model",
-        "Transcription mode",
-        "GPT post-processing",
-        "Input device",
-        "Punctuation",
-        "Run at login",
-        "Save transcript history",
-        "Advanced",
     ]
     assert [item.text for item in menu] == [
-        "Settings",
+        "GPT post-processing",
+        "Tap to start / stop",
+        "- - - -",
+        "Input device: USB Mic",
+        "Transcription mode: Record then paste",
+        "Recorded model: GPT-4o Mini Transcribe",
+        "GPT model: GPT-5.6 Luna (fast)",
+        "GPT instructions: Clean up speech",
+        "Text output",
+        "- - - -",
+        f"Dictation hotkey: {app.dictation_hotkey_summary()}...",
+        "More settings",
+        "- - - -",
         "Open transcript browser",
         "Open transcript history",
+        "- - - -",
         "Restart service",
         "Quit",
     ]
@@ -1696,7 +1701,12 @@ def test_build_input_device_menu_includes_default_and_listed_devices():
 
     device_menu = app.build_input_device_menu()
 
-    assert [item.text for item in device_menu] == [app.DEFAULT_DEVICE_LABEL, "USB Mic"]
+    assert [item.text for item in device_menu] == [
+        app.DEFAULT_DEVICE_LABEL,
+        "USB Mic",
+        "- - - -",
+        "Refresh devices",
+    ]
 
 
 def test_get_key_name_supports_keycode_and_named_keys():
