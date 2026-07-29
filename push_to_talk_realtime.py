@@ -564,7 +564,10 @@ def current_tray_status_signature() -> tuple[str, str, str, str, str, bool, bool
         mode = "Dictation" if state.mode == MODE_DICTATION else "Worklog"
         device_label = state.active_device_label
         audio_source = state.active_audio_source
-        transcription_engine = transcription_engine_label(state.transcription_engine)
+        transcription_engine = transcription_engine_label(
+            state.transcription_engine,
+            state.recorded_transcription_model,
+        )
         muted_warning = state.muted_warning
     return (
         status,

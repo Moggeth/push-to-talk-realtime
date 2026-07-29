@@ -1095,6 +1095,16 @@ def test_update_tray_tooltip_resets_title_when_disabled():
     assert app.tray_icon.title == app.TRAY_TITLE
 
 
+def test_tray_status_signature_uses_persisted_recorded_model():
+    with app.state.lock:
+        app.state.transcription_engine = app.TRANSCRIPTION_ENGINE_RECORDED
+        app.state.recorded_transcription_model = "gpt-4o-mini-transcribe"
+
+    signature = app.current_tray_status_signature()
+
+    assert signature[4] == "GPT-4o Mini Transcribe"
+
+
 def test_update_tray_icon_uses_listening_color(monkeypatch):
     app.tray_icon = FakeTrayIcon()
     colors = []
