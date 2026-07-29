@@ -474,7 +474,7 @@ def test_archive_raw_and_final_transcript_preserves_both_stages(monkeypatch):
     entry_id = app.archive_raw_transcript(
         mode=app.MODE_DICTATION,
         audio_source=app.AUDIO_SOURCE_SYSTEM,
-        transcription_engine=app.TRANSCRIPTION_ENGINE_WHISPER,
+        transcription_engine=app.TRANSCRIPTION_ENGINE_RECORDED,
         transcription_model="gpt-4o-mini-transcribe",
         post_processing_enabled=True,
         post_process_model="gpt-5.6-luna",
@@ -494,7 +494,7 @@ def test_archive_raw_and_final_transcript_preserves_both_stages(monkeypatch):
             {
                 "mode": app.MODE_DICTATION,
                 "audio_source": app.AUDIO_SOURCE_SYSTEM,
-                "transcription_engine": app.TRANSCRIPTION_ENGINE_WHISPER,
+                "transcription_engine": app.TRANSCRIPTION_ENGINE_RECORDED,
                 "transcription_model": "gpt-4o-mini-transcribe",
                 "post_processing_enabled": True,
                 "post_process_model": "gpt-5.6-luna",
@@ -520,7 +520,7 @@ def test_apply_persisted_settings_loads_hotkeys_and_engine(monkeypatch, tmp_path
     settings_path.write_text(
         json.dumps(
             {
-                "transcription_engine": app.TRANSCRIPTION_ENGINE_GPT4O_REALTIME,
+                "transcription_engine": "gpt4o_realtime",
                 "dictation_history_enabled": False,
                 "transcription_model": "gpt-4o-mini-transcribe",
                 "post_processing_enabled": True,
@@ -538,7 +538,7 @@ def test_apply_persisted_settings_loads_hotkeys_and_engine(monkeypatch, tmp_path
 
     app.apply_persisted_settings()
 
-    assert app.state.transcription_engine == app.TRANSCRIPTION_ENGINE_GPT4O_REALTIME
+    assert app.state.transcription_engine == app.TRANSCRIPTION_ENGINE_RECORDED
     assert app.state.recorded_transcription_model == "gpt-4o-mini-transcribe"
     assert app.HOTKEY_DICTATION == "F15"
     assert app.HOTKEY_WORKLOG == "F16"
@@ -557,7 +557,7 @@ def test_save_settings_to_disk_includes_hotkeys(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(app, "HOTKEY_DICTATION", "F17")
     monkeypatch.setattr(app, "HOTKEY_WORKLOG", "F18")
     with app.state.lock:
-        app.state.transcription_engine = app.TRANSCRIPTION_ENGINE_WHISPER
+        app.state.transcription_engine = app.TRANSCRIPTION_ENGINE_RECORDED
         app.state.recorded_transcription_model = "whisper-1"
         app.state.dictation_hotkey_kind = app.HOTKEY_KIND_KEYBOARD
         app.state.dictation_hotkey_tokens = ("F17",)
@@ -571,7 +571,7 @@ def test_save_settings_to_disk_includes_hotkeys(monkeypatch, tmp_path: Path):
 
     saved = json.loads(settings_path.read_text(encoding="utf-8"))
     assert saved == {
-        "transcription_engine": app.TRANSCRIPTION_ENGINE_WHISPER,
+        "transcription_engine": app.TRANSCRIPTION_ENGINE_RECORDED,
         "transcription_model": "whisper-1",
         "dictation_hotkey_kind": app.HOTKEY_KIND_KEYBOARD,
         "dictation_hotkey_tokens": ["F17"],
@@ -588,10 +588,11 @@ def test_recorded_transcription_model_aliases_and_selector(monkeypatch):
     refresh_calls = []
     monkeypatch.setattr(app, "refresh_tray_menu", lambda: refresh_calls.append("refresh"))
 
-    assert app.SessionState().recorded_transcription_model == "whisper-1"
+    assert app.SessionState().recorded_transcription_model == "gpt-transcribe"
     assert app.normalize_recorded_transcription_model("whisper") == "whisper-1"
     assert app.normalize_recorded_transcription_model("gpt-4o") == "gpt-4o-transcribe"
-    assert app.normalize_recorded_transcription_model("unknown-model") == "whisper-1"
+    assert app.normalize_recorded_transcription_model("gpt") == "gpt-transcribe"
+    assert app.normalize_recorded_transcription_model("unknown-model") == "gpt-transcribe"
 
     app.set_recorded_transcription_model("gpt-4o-mini-transcribe")
 
@@ -599,13 +600,16 @@ def test_recorded_transcription_model_aliases_and_selector(monkeypatch):
     assert refresh_calls == ["refresh"]
 
 
-def test_recorded_transcription_model_menu_lists_available_models():
-    menu = app.build_recorded_transcription_model_menu()
+def test_transcription_menu_lists_recorded_models_and_live_option():
+    menu = app.build_transcription_menu()
 
     assert [item.text for item in menu] == [
+        "GPT Transcribe (recommended)",
         "GPT-4o Transcribe",
         "GPT-4o Mini Transcribe",
         "Whisper",
+        "- - - -",
+        "GPT Live Transcribe",
     ]
 
 
@@ -1046,8 +1050,8 @@ def test_update_tray_tooltip_includes_status_mode_device_and_muted_warning():
 
     app.update_tray_tooltip()
 
-    assert (
-        app.tray_icon.title == f"{app.TRAY_TITLE} - Listening (Worklog, USB Mic, Whisper, Muted?)"
+    assert app.tray_icon.title == (
+        f"{app.TRAY_TITLE} - Listening (Worklog, USB Mic, GPT Transcribe (recommended), Muted?)"
     )
 
 
@@ -1063,7 +1067,8 @@ def test_update_tray_tooltip_identifies_system_audio_source():
     app.update_tray_tooltip()
 
     assert app.tray_icon.title == (
-        f"{app.TRAY_TITLE} - Listening (Dictation, System audio, Stereo Mix, Whisper)"
+        f"{app.TRAY_TITLE} - Listening "
+        "(Dictation, System audio, Stereo Mix, GPT Transcribe (recommended))"
     )
 
 
@@ -1077,7 +1082,9 @@ def test_update_tray_tooltip_identifies_gpt_post_processing():
 
     app.update_tray_tooltip()
 
-    assert app.tray_icon.title == (f"{app.TRAY_TITLE} - Post-processing (Dictation, Whisper)")
+    assert app.tray_icon.title == (
+        f"{app.TRAY_TITLE} - Post-processing (Dictation, GPT Transcribe (recommended))"
+    )
 
 
 def test_update_tray_tooltip_resets_title_when_disabled():
@@ -1692,19 +1699,16 @@ def test_menu_builders_include_expected_top_level_items(monkeypatch):
     app.DEVICE_LIST = [(2, "USB Mic")]
 
     punctuation_menu = app.build_punctuation_menu()
-    more_settings_menu = app.build_more_settings_menu()
+    text_behavior_menu = app.build_text_behavior_menu()
     monkeypatch.setattr(app, "build_input_device_menu", lambda: "device")
-    monkeypatch.setattr(app, "build_recorded_transcription_model_menu", lambda: "models")
-    monkeypatch.setattr(app, "build_transcription_menu", lambda: "mode")
-    monkeypatch.setattr(app, "build_post_process_model_menu", lambda: "gpt-models")
-    monkeypatch.setattr(app, "build_post_process_instruction_menu", lambda: "instructions")
-    monkeypatch.setattr(app, "build_punctuation_menu", lambda: "punctuation")
-    monkeypatch.setattr(app, "build_more_settings_menu", lambda: "more")
+    monkeypatch.setattr(app, "build_transcription_menu", lambda: "transcription")
+    monkeypatch.setattr(app, "build_cleanup_settings_menu", lambda: "cleanup")
+    monkeypatch.setattr(app, "build_text_behavior_menu", lambda: "behavior")
+    monkeypatch.setattr(app, "build_shortcuts_startup_menu", lambda: "shortcuts")
+    monkeypatch.setattr(app, "build_history_menu", lambda: "history")
     monkeypatch.setattr(app, "current_input_device_label", lambda: "USB Mic")
-    monkeypatch.setattr(app, "current_transcription_mode_label", lambda: "Record then paste")
-    monkeypatch.setattr(app, "current_recorded_model_label", lambda: "GPT-4o Mini Transcribe")
+    monkeypatch.setattr(app, "current_transcription_label", lambda: "GPT Transcribe")
     monkeypatch.setattr(app, "current_post_process_model_label", lambda: "GPT-5.6 Luna (fast)")
-    monkeypatch.setattr(app, "current_post_process_instruction_label", lambda: "Clean up speech")
     menu = app.build_menu()
 
     assert [item.text for item in punctuation_menu] == [
@@ -1715,32 +1719,25 @@ def test_menu_builders_include_expected_top_level_items(monkeypatch):
         "Capitalize first letter",
         "Normalize whitespace",
     ]
-    assert [item.text for item in more_settings_menu] == [
-        f"Work log hotkey: {app.HOTKEY_WORKLOG}",
-        "Run at login",
-        "Save legacy transcript history",
+    assert [item.text for item in text_behavior_menu] == [
+        "Tap to start / stop",
+        "Text output",
+        "- - - -",
         "Beeps",
         "Status tooltip",
         "Mute monitor",
     ]
     assert [item.text for item in menu] == [
-        "GPT post-processing",
-        "Tap to start / stop",
+        "GPT cleanup",
+        "Cleanup settings: GPT-5.6 Luna (fast)",
         "- - - -",
-        "Input device: USB Mic",
-        "Transcription mode: Record then paste",
-        "Recorded model: GPT-4o Mini Transcribe",
-        "GPT model: GPT-5.6 Luna (fast)",
-        "GPT instructions: Clean up speech",
-        "Text output",
+        "Transcription: GPT Transcribe",
+        "Audio input: USB Mic",
+        "Text & behavior",
+        "Shortcuts & startup",
+        "History",
         "- - - -",
-        f"Dictation hotkey: {app.dictation_hotkey_summary()}...",
-        "More settings",
-        "- - - -",
-        "Open transcript browser",
-        "Open transcript history",
-        "- - - -",
-        "Restart service",
+        "Restart",
         "Quit",
     ]
 
@@ -1883,7 +1880,7 @@ def test_tray_setup_marks_icon_visible_and_starts_listener(monkeypatch):
     assert logs == [
         (
             f"Push-to-talk ready. {app.HOTKEY_DICTATION} for dictation/paste, "
-            f"{app.HOTKEY_WORKLOG} for work log. Engine: Whisper."
+            f"{app.HOTKEY_WORKLOG} for work log. Engine: GPT Transcribe (recommended)."
         ),
         (
             f"[Tray] Backend {app.pystray.Icon.__module__}; runtime updates:"

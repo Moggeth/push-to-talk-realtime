@@ -93,46 +93,46 @@ DEFAULT_TRANSCRIPTION_PROMPT = (
     "Transcribe exactly what is spoken. Use full sentence punctuation, including periods."
 )
 RECORDED_TRANSCRIBE_MODEL_OPTIONS = (
+    "gpt-transcribe",
     "gpt-4o-transcribe",
     "gpt-4o-mini-transcribe",
     "whisper-1",
 )
 RECORDED_TRANSCRIBE_MODEL_LABELS = {
+    "gpt-transcribe": "GPT Transcribe (recommended)",
     "gpt-4o-transcribe": "GPT-4o Transcribe",
     "gpt-4o-mini-transcribe": "GPT-4o Mini Transcribe",
     "whisper-1": "Whisper",
 }
 DEFAULT_RECORDED_TRANSCRIBE_MODEL = (
-    os.getenv("OPENAI_TRANSCRIBE_MODEL") or os.getenv("OPENAI_WHISPER_MODEL") or "whisper-1"
+    os.getenv("OPENAI_TRANSCRIBE_MODEL") or os.getenv("OPENAI_WHISPER_MODEL") or "gpt-transcribe"
 ).strip()
 RECORDED_TRANSCRIBE_PROMPT = os.getenv(
     "OPENAI_TRANSCRIBE_PROMPT",
     os.getenv("OPENAI_WHISPER_PROMPT", DEFAULT_TRANSCRIPTION_PROMPT),
 ).strip()
-REALTIME_TRANSCRIBE_MODEL = os.getenv(
-    "OPENAI_REALTIME_TRANSCRIBE_MODEL", "gpt-4o-transcribe"
+LIVE_TRANSCRIBE_MODEL = "gpt-live-transcribe"
+LIVE_TRANSCRIBE_LANGUAGES = tuple(
+    language.strip()
+    for language in os.getenv(
+        "OPENAI_LIVE_TRANSCRIBE_LANGUAGES",
+        os.getenv("OPENAI_REALTIME_TRANSCRIBE_LANGUAGE", ""),
+    ).split(",")
+    if language.strip()
+)
+LIVE_TRANSCRIBE_PROMPT = os.getenv(
+    "OPENAI_LIVE_TRANSCRIBE_PROMPT",
+    os.getenv("OPENAI_REALTIME_TRANSCRIBE_PROMPT", ""),
 ).strip()
-REALTIME_SESSION_MODEL = os.getenv("OPENAI_REALTIME_SESSION_MODEL", "").strip()
-REALTIME_TRANSCRIBE_LANGUAGE = os.getenv("OPENAI_REALTIME_TRANSCRIBE_LANGUAGE", "").strip()
-REALTIME_TRANSCRIBE_PROMPT = os.getenv(
-    "OPENAI_REALTIME_TRANSCRIBE_PROMPT", DEFAULT_TRANSCRIPTION_PROMPT
-).strip()
+LIVE_TRANSCRIBE_DELAY = os.getenv("OPENAI_LIVE_TRANSCRIBE_DELAY", "low").strip()
 REALTIME_WS_URL = os.getenv(
     "OPENAI_REALTIME_WS_URL",
     "wss://api.openai.com/v1/realtime?intent=transcription",
 ).strip()
-REALTIME_WS_USE_BETA_HEADER = os.getenv(
-    "OPENAI_REALTIME_WS_USE_BETA_HEADER", "0"
-).strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
-TRANSCRIPTION_ENGINE_WHISPER = "whisper"
-TRANSCRIPTION_ENGINE_GPT4O_REALTIME = "gpt4o_realtime"
+TRANSCRIPTION_ENGINE_RECORDED = "recorded"
+TRANSCRIPTION_ENGINE_LIVE = "live"
 DEFAULT_TRANSCRIPTION_ENGINE = (
-    os.getenv("TRANSCRIPTION_ENGINE", TRANSCRIPTION_ENGINE_WHISPER).strip().lower()
+    os.getenv("TRANSCRIPTION_ENGINE", TRANSCRIPTION_ENGINE_RECORDED).strip().lower()
 )
 REALTIME_INPUT_SAMPLE_RATE = 24000
 REALTIME_LIVE_TYPING_ENABLED = os.getenv("REALTIME_LIVE_TYPING", "1").strip().lower() not in {
@@ -142,21 +142,8 @@ REALTIME_LIVE_TYPING_ENABLED = os.getenv("REALTIME_LIVE_TYPING", "1").strip().lo
     "off",
 }
 LIVE_CORRECTION_MAX_BACKSPACES = 24
-REALTIME_FINAL_WAIT_S = 1.5
-REALTIME_COMMIT_INTERVAL_S = float(os.getenv("REALTIME_COMMIT_INTERVAL_S", "0.8"))
-REALTIME_LIVE_MIN_CHUNK_S = float(os.getenv("REALTIME_LIVE_MIN_CHUNK_S", "1.6"))
-REALTIME_LIVE_MAX_CHUNK_S = float(os.getenv("REALTIME_LIVE_MAX_CHUNK_S", "4.0"))
-REALTIME_LIVE_SILENCE_S = float(os.getenv("REALTIME_LIVE_SILENCE_S", "0.65"))
-REALTIME_LIVE_SILENCE_RMS = float(os.getenv("REALTIME_LIVE_SILENCE_RMS", "0.007"))
-REALTIME_SERVER_VAD_THRESHOLD = float(os.getenv("REALTIME_SERVER_VAD_THRESHOLD", "0.5"))
-REALTIME_SERVER_VAD_PREFIX_MS = int(os.getenv("REALTIME_SERVER_VAD_PREFIX_MS", "300"))
-REALTIME_SERVER_VAD_SILENCE_MS = int(os.getenv("REALTIME_SERVER_VAD_SILENCE_MS", "700"))
-REALTIME_TRANSCRIBE_MODEL_FALLBACKS = (
-    "gpt-4o-transcribe",
-    "gpt-4o-transcribe-latest",
-    "gpt-4o-mini-transcribe",
-    "whisper-1",
-)
+LIVE_SESSION_READY_TIMEOUT_S = 8.0
+LIVE_FINAL_TIMEOUT_S = 10.0
 POST_PROCESS_MODEL_OPTIONS = (
     "gpt-5.6-luna",
     "gpt-5.6-terra",
@@ -242,14 +229,16 @@ BEEP_STOP_PATTERN = [(659, 70), (494, 90)]
 
 def normalize_transcription_engine(engine: str) -> str:
     normalized = (engine or "").strip().lower()
-    if normalized == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
-        return TRANSCRIPTION_ENGINE_GPT4O_REALTIME
-    return TRANSCRIPTION_ENGINE_WHISPER
+    if normalized in {TRANSCRIPTION_ENGINE_LIVE, "gpt_live", "gpt-live-transcribe"}:
+        return TRANSCRIPTION_ENGINE_LIVE
+    # The old realtime engine never worked reliably. Migrate it to the safe recorded path.
+    return TRANSCRIPTION_ENGINE_RECORDED
 
 
 def normalize_recorded_transcription_model(model: str) -> str:
     normalized = (model or "").strip().lower()
     aliases = {
+        "gpt": "gpt-transcribe",
         "gpt4o": "gpt-4o-transcribe",
         "gpt-4o": "gpt-4o-transcribe",
         "4o": "gpt-4o-transcribe",
@@ -261,7 +250,7 @@ def normalize_recorded_transcription_model(model: str) -> str:
     normalized = aliases.get(normalized, normalized)
     if normalized in RECORDED_TRANSCRIBE_MODEL_OPTIONS:
         return normalized
-    return "whisper-1"
+    return "gpt-transcribe"
 
 
 def recorded_transcription_model_label(model: str) -> str:
@@ -288,24 +277,10 @@ def normalize_post_process_instruction_profile(profile: str) -> str:
     return DEFAULT_POST_PROCESS_INSTRUCTION_PROFILE
 
 
-def realtime_transcribe_model_candidates() -> list[str]:
-    candidates: list[str] = []
-    override = REALTIME_SESSION_MODEL.strip()
-    if override:
-        candidates.append(override)
-    primary = REALTIME_TRANSCRIBE_MODEL.strip()
-    if primary:
-        candidates.append(primary)
-    for fallback in REALTIME_TRANSCRIBE_MODEL_FALLBACKS:
-        if fallback not in candidates:
-            candidates.append(fallback)
-    return candidates
-
-
 def transcription_engine_label(engine: str, recorded_model: str | None = None) -> str:
     normalized = normalize_transcription_engine(engine)
-    if normalized == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
-        return "GPT-4o Realtime"
+    if normalized == TRANSCRIPTION_ENGINE_LIVE:
+        return "GPT Live Transcribe"
     return recorded_transcription_model_label(recorded_model or DEFAULT_RECORDED_TRANSCRIBE_MODEL)
 
 
@@ -955,7 +930,7 @@ def _prewarm_transcription_stack() -> None:
 
         with state.lock:
             selected_engine = state.transcription_engine
-        if selected_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
+        if selected_engine == TRANSCRIPTION_ENGINE_LIVE:
             try:
                 from websockets.sync.client import connect as _connect  # noqa: F401
 
@@ -992,13 +967,13 @@ def can_use_realtime_engine() -> bool:
 def enforce_transcription_engine_dependencies() -> None:
     with state.lock:
         engine = state.transcription_engine
-    if engine != TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
+    if engine != TRANSCRIPTION_ENGINE_LIVE:
         return
     dep_error = realtime_dependency_error()
     if dep_error:
         log("[Transcription engine]", dep_error)
         with state.lock:
-            state.transcription_engine = TRANSCRIPTION_ENGINE_WHISPER
+            state.transcription_engine = TRANSCRIPTION_ENGINE_RECORDED
 
 
 def paste_text(text: str, target: PasteTarget | None = None):
@@ -1814,412 +1789,156 @@ def resample_pcm16_mono(pcm: np.ndarray, src_rate: int, dst_rate: int) -> np.nda
     return np.clip(np.round(dst), -32768, 32767).astype(np.int16)
 
 
-def transcribe_pcm16_with_models(
-    client: Any,
-    pcm: np.ndarray,
-    *,
-    sample_rate: int,
-    model_candidates: list[str],
-    prompt: str = "",
-    language: str = "",
-) -> tuple[str, str]:
-    if pcm.size == 0:
-        return "", ""
-
-    import io
-    import wave
-
-    wav_bytes = io.BytesIO()
-    with wave.open(wav_bytes, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm.astype(np.int16, copy=False).tobytes())
-    wav_bytes.name = "recording.wav"
-
-    request_args: dict[str, Any] = {"file": wav_bytes, "response_format": "json"}
-    if language:
-        request_args["language"] = language
-    if prompt:
-        request_args["prompt"] = prompt
-
-    last_error: BaseException | None = None
-    for model_name in model_candidates:
-        try:
-            wav_bytes.seek(0)
-            response = client.audio.transcriptions.create(
-                model=model_name,
-                **request_args,
-            )
-            text = (getattr(response, "text", "") or "").strip()
-            if text:
-                return text, model_name
-        except Exception as exc:  # pylint: disable=broad-except
-            last_error = exc
-            continue
-
-    if last_error:
-        log("[GPT-4o Realtime error]", last_error)
-    return "", ""
-
-
-def build_transcription_session_update_event(model_name: str) -> dict[str, Any]:
+def build_live_transcription_session_update_event() -> dict[str, Any]:
     session: dict[str, Any] = {
         "type": "transcription",
         "audio": {
             "input": {
                 "format": {"type": "audio/pcm", "rate": REALTIME_INPUT_SAMPLE_RATE},
                 "transcription": {
-                    "model": model_name,
+                    "model": LIVE_TRANSCRIBE_MODEL,
                 },
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": REALTIME_SERVER_VAD_THRESHOLD,
-                    "prefix_padding_ms": REALTIME_SERVER_VAD_PREFIX_MS,
-                    "silence_duration_ms": REALTIME_SERVER_VAD_SILENCE_MS,
-                },
+                "turn_detection": None,
             }
         },
     }
-    if REALTIME_TRANSCRIBE_LANGUAGE:
-        session["audio"]["input"]["transcription"]["language"] = REALTIME_TRANSCRIBE_LANGUAGE
-    if REALTIME_TRANSCRIBE_PROMPT:
-        session["audio"]["input"]["transcription"]["prompt"] = REALTIME_TRANSCRIBE_PROMPT
+    transcription = session["audio"]["input"]["transcription"]
+    if LIVE_TRANSCRIBE_LANGUAGES:
+        transcription["languages"] = list(LIVE_TRANSCRIBE_LANGUAGES)
+    if LIVE_TRANSCRIBE_PROMPT:
+        transcription["prompt"] = LIVE_TRANSCRIBE_PROMPT
+    if LIVE_TRANSCRIBE_DELAY:
+        transcription["delay"] = LIVE_TRANSCRIBE_DELAY
     return {
         "type": "session.update",
         "session": session,
     }
 
 
-def build_realtime_session_config(*, server_vad: bool, transcribe_model: str) -> dict[str, Any]:
-    session_config: dict[str, Any] = {
-        "audio": {
-            "input": {
-                "format": {"type": "audio/pcm", "rate": REALTIME_INPUT_SAMPLE_RATE},
-                "transcription": {"model": transcribe_model},
-            }
-        },
-    }
-    if server_vad:
-        session_config["audio"]["input"]["turn_detection"] = {"type": "server_vad"}
-    else:
-        session_config["audio"]["input"]["turn_detection"] = None
-    if REALTIME_TRANSCRIBE_LANGUAGE:
-        session_config["audio"]["input"]["transcription"]["language"] = REALTIME_TRANSCRIBE_LANGUAGE
-    if REALTIME_TRANSCRIBE_PROMPT:
-        session_config["audio"]["input"]["transcription"]["prompt"] = REALTIME_TRANSCRIBE_PROMPT
-    return session_config
+def _live_realtime_error_message(event: dict[str, Any]) -> str:
+    error = event.get("error", {})
+    if not isinstance(error, dict):
+        return str(error)
+    parts = [error.get("type"), error.get("code"), error.get("message")]
+    return ": ".join(str(part) for part in parts if part) or "unknown realtime error"
 
 
-def transcribe_with_gpt4o_realtime(chunks: list) -> str:
-    """Transcribe full audio with GPT-4o transcribe-family models."""
-    if not chunks:
-        return ""
-    dep_error = realtime_dependency_error()
-    if dep_error:
-        log("[GPT-4o Realtime]", dep_error)
-        return ""
-    try:
-        pcm = np.concatenate(chunks, axis=0).astype(np.int16, copy=False)
-        if pcm.size == 0:
-            return ""
-
-        client = get_openai_client()
-        text, used_model = transcribe_pcm16_with_models(
-            client,
-            pcm,
-            sample_rate=SAMPLE_RATE,
-            model_candidates=realtime_transcribe_model_candidates(),
-            prompt=REALTIME_TRANSCRIBE_PROMPT,
-            language=REALTIME_TRANSCRIBE_LANGUAGE,
-        )
-        if text:
-            log(f"[GPT-4o Realtime] Used model '{used_model}' for full transcription.")
-        return text
-    except Exception as exc:  # pylint: disable=broad-except
-        log("[GPT-4o Realtime error]", exc)
-        return ""
-
-
-def transcribe_with_gpt4o_realtime_stream_chunked(
+def run_live_transcription_session(
+    ws: Any,
     audio_queue: "queue.Queue[np.ndarray]",
     stop_event: threading.Event,
     on_delta: Callable[[str], None] | None = None,
 ) -> str:
-    """Legacy local chunking path (retained for rollback); strict mode does not call this."""
-    dep_error = realtime_dependency_error()
-    if dep_error:
-        log("[GPT-4o Realtime]", dep_error)
-        return ""
-    try:
-        from openai import OpenAI
+    ws.send(json.dumps(build_live_transcription_session_update_event()))
+    session_ready_deadline = time.monotonic() + LIVE_SESSION_READY_TIMEOUT_S
+    session_ready = False
+    committed = False
+    sent_audio = False
+    final_deadline = 0.0
+    partials_by_item: dict[str, list[str]] = {}
+    completed_by_item: dict[str, str] = {}
 
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        model_candidates = realtime_transcribe_model_candidates()
-        live_text = ""
-        pending_chunks: list[np.ndarray] = []
-        pending_samples = 0
-        min_chunk_s = max(0.35, REALTIME_LIVE_MIN_CHUNK_S)
-        max_chunk_s = max(min_chunk_s, REALTIME_LIVE_MAX_CHUNK_S)
-        silence_required_s = max(0.2, REALTIME_LIVE_SILENCE_S)
-        silence_rms_threshold = max(0.001, REALTIME_LIVE_SILENCE_RMS)
-        flush_interval_s = max(0.4, REALTIME_COMMIT_INTERVAL_S)
-        min_flush_samples = int(SAMPLE_RATE * min_chunk_s)
-        max_flush_samples = int(SAMPLE_RATE * max_chunk_s)
-        last_flush_at = time.monotonic()
-        silence_run_s = 0.0
-        logged_live = False
-        active_model = ""
-        log(
-            "[Realtime]",
-            f"Live chunking min={min_chunk_s:.2f}s max={max_chunk_s:.2f}s",
-            f"silence={silence_required_s:.2f}s (rms<={silence_rms_threshold:.4f}).",
-        )
-
-        while True:
-            should_finish = stop_event.is_set() and audio_queue.empty()
-            chunk: np.ndarray | None = None
-            if not should_finish:
+    while True:
+        if session_ready and not committed:
+            while True:
                 try:
-                    chunk = audio_queue.get(timeout=0.05)
+                    chunk = audio_queue.get_nowait()
                 except queue.Empty:
-                    chunk = None
-            if chunk is not None and chunk.size:
-                chunk_i16 = chunk.astype(np.int16, copy=False)
-                pending_chunks.append(chunk_i16)
-                chunk_samples = int(chunk_i16.size)
-                pending_samples += chunk_samples
-                if chunk_samples:
-                    chunk_norm = chunk_i16.astype(np.float32) / 32767.0
-                    chunk_rms = float(np.sqrt(np.mean(chunk_norm * chunk_norm)))
-                    if chunk_rms <= silence_rms_threshold:
-                        silence_run_s += chunk_samples / SAMPLE_RATE
-                    else:
-                        silence_run_s = 0.0
-
-            now = time.monotonic()
-            should_flush = False
-            if pending_samples >= max_flush_samples or (
-                pending_samples >= min_flush_samples
-                and silence_run_s >= silence_required_s
-                and (now - last_flush_at) >= flush_interval_s
-            ):
-                should_flush = True
-            if should_finish and pending_samples > 0:
-                should_flush = True
-
-            if should_flush:
-                segment_pcm = np.concatenate(pending_chunks, axis=0).astype(np.int16, copy=False)
-                pending_chunks.clear()
-                pending_samples = 0
-                last_flush_at = now
-                silence_run_s = 0.0
-
-                segment_text, used_model = transcribe_pcm16_with_models(
-                    client,
-                    segment_pcm,
-                    sample_rate=SAMPLE_RATE,
-                    model_candidates=model_candidates,
-                    prompt=REALTIME_TRANSCRIBE_PROMPT,
-                    language=REALTIME_TRANSCRIBE_LANGUAGE,
+                    break
+                if not chunk.size:
+                    continue
+                pcm = resample_pcm16_mono(
+                    chunk.astype(np.int16, copy=False),
+                    SAMPLE_RATE,
+                    REALTIME_INPUT_SAMPLE_RATE,
                 )
-                if used_model and used_model != active_model:
-                    active_model = used_model
-                    log(f"[Realtime] Live chunk model: {used_model}.")
-                if segment_text:
-                    if not logged_live:
-                        log("[Realtime] Live chunk transcription active.")
-                        logged_live = True
-                    delta_text = segment_text.strip()
-                    if delta_text:
-                        if live_text and not live_text.endswith((" ", "\n")):
-                            delta_text = " " + delta_text
-                        live_text += delta_text
-                        if on_delta is not None:
-                            on_delta(delta_text)
+                if not pcm.size:
+                    continue
+                ws.send(
+                    json.dumps(
+                        {
+                            "type": "input_audio_buffer.append",
+                            "audio": base64.b64encode(pcm.tobytes()).decode("ascii"),
+                        }
+                    )
+                )
+                sent_audio = True
 
-            if should_finish and pending_samples == 0:
-                break
+            if stop_event.is_set() and audio_queue.empty():
+                if not sent_audio:
+                    return ""
+                ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                committed = True
+                final_deadline = time.monotonic() + LIVE_FINAL_TIMEOUT_S
 
-        return live_text.strip()
-    except Exception as exc:  # pylint: disable=broad-except
-        log("[GPT-4o Realtime error]", exc)
-        return ""
+        now = time.monotonic()
+        if not session_ready and now >= session_ready_deadline:
+            raise TimeoutError("GPT Live Transcribe session did not become ready")
+        if committed and now >= final_deadline:
+            raise TimeoutError("GPT Live Transcribe did not return a completed transcript")
+
+        try:
+            message = ws.recv(timeout=0.05)
+        except TimeoutError:
+            continue
+        if message is None:
+            continue
+        if isinstance(message, bytes):
+            message = message.decode("utf-8", errors="replace")
+        event = json.loads(message)
+        event_type = str(event.get("type", ""))
+        if event_type == "error":
+            raise RuntimeError(f"GPT Live Transcribe error: {_live_realtime_error_message(event)}")
+        if event_type == "session.updated":
+            session_ready = True
+            continue
+        if event_type == "conversation.item.input_audio_transcription.delta":
+            item_id = str(event.get("item_id", "") or "default")
+            delta = str(event.get("delta", "") or "")
+            if delta:
+                partials_by_item.setdefault(item_id, []).append(delta)
+                if on_delta is not None:
+                    on_delta(delta)
+            continue
+        if event_type == "conversation.item.input_audio_transcription.completed":
+            item_id = str(event.get("item_id", "") or "default")
+            transcript = str(event.get("transcript", "") or "").strip()
+            completed_by_item[item_id] = transcript
+            if on_delta is not None and transcript and not partials_by_item.get(item_id):
+                on_delta(transcript)
+            if committed:
+                return " ".join(text for text in completed_by_item.values() if text).strip()
 
 
-def transcribe_with_gpt4o_realtime_stream_server_vad(
+def transcribe_with_gpt_live_stream(
     audio_queue: "queue.Queue[np.ndarray]",
     stop_event: threading.Event,
     on_delta: Callable[[str], None] | None = None,
 ) -> str:
+    dep_error = realtime_dependency_error()
+    if dep_error:
+        log("[GPT Live Transcribe]", dep_error)
+        return ""
     try:
         from websockets.sync.client import connect
+
+        log(f"[GPT Live Transcribe] Connecting to {REALTIME_WS_URL}.")
+        with connect(
+            REALTIME_WS_URL,
+            additional_headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            open_timeout=LIVE_SESSION_READY_TIMEOUT_S,
+            close_timeout=2,
+            max_size=2**22,
+        ) as ws:
+            return run_live_transcription_session(ws, audio_queue, stop_event, on_delta)
     except Exception as exc:  # pylint: disable=broad-except
-        log("[Realtime] Server VAD websocket unavailable:", exc)
+        log("[GPT Live Transcribe error]", exc)
         return ""
-
-    model_candidates = realtime_transcribe_model_candidates()
-    last_error: BaseException | None = None
-    for model_name in model_candidates:
-        try:
-            ws_url = REALTIME_WS_URL
-            headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
-            if REALTIME_WS_USE_BETA_HEADER:
-                headers["OpenAI-Beta"] = "realtime=v1"
-            log(f"[Realtime] Server VAD connect url='{ws_url}' model='{model_name}'.")
-            with connect(
-                ws_url,
-                additional_headers=headers,
-                open_timeout=8,
-                close_timeout=2,
-                max_size=2**22,
-            ) as ws:
-                ws.send(json.dumps(build_transcription_session_update_event(model_name)))
-
-                transcripts: list[str] = []
-                partials: list[str] = []
-                idle_after_stop_s = 0.0
-                saw_delta_since_completed = False
-                logged_live_delta = False
-                pending_commit = False
-                stream_finished = False
-
-                while True:
-                    while True:
-                        try:
-                            chunk = audio_queue.get_nowait()
-                        except queue.Empty:
-                            break
-                        if chunk.size == 0:
-                            continue
-                        pcm_resampled = resample_pcm16_mono(
-                            chunk.astype(np.int16, copy=False),
-                            SAMPLE_RATE,
-                            REALTIME_INPUT_SAMPLE_RATE,
-                        )
-                        if pcm_resampled.size == 0:
-                            continue
-                        ws.send(
-                            json.dumps(
-                                {
-                                    "type": "input_audio_buffer.append",
-                                    "audio": base64.b64encode(pcm_resampled.tobytes()).decode(
-                                        "ascii"
-                                    ),
-                                }
-                            )
-                        )
-                        pending_commit = True
-
-                    if stop_event.is_set() and audio_queue.empty() and not stream_finished:
-                        if pending_commit:
-                            ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                            pending_commit = False
-                        stream_finished = True
-
-                    try:
-                        message = ws.recv(timeout=0.1)
-                    except TimeoutError:
-                        message = None
-                    except Exception as exc:  # pylint: disable=broad-except
-                        if stream_finished:
-                            break
-                        raise exc
-
-                    if message is None:
-                        if stream_finished:
-                            idle_after_stop_s += 0.1
-                            if idle_after_stop_s >= REALTIME_FINAL_WAIT_S:
-                                break
-                        continue
-
-                    idle_after_stop_s = 0.0
-                    if isinstance(message, bytes):
-                        message = message.decode("utf-8", errors="replace")
-                    try:
-                        event = json.loads(message)
-                    except Exception:  # pylint: disable=broad-except
-                        continue
-                    event_type = str(event.get("type", ""))
-                    if event_type == "session.created":
-                        session_obj = event.get("session", {})
-                        if isinstance(session_obj, dict):
-                            session_type = str(session_obj.get("type", "") or "")
-                            if session_type and session_type != "transcription":
-                                raise RuntimeError(
-                                    f"Realtime session type mismatch: expected transcription, got {session_type!r}."
-                                )
-                        continue
-                    if event_type == "session.updated":
-                        continue
-                    if event_type == "conversation.item.input_audio_transcription.delta":
-                        delta_text = str(event.get("delta", "") or "")
-                        if delta_text:
-                            saw_delta_since_completed = True
-                            partials.append(delta_text)
-                            if not logged_live_delta:
-                                log("[Realtime] Server VAD delta stream active.")
-                                logged_live_delta = True
-                            if on_delta is not None:
-                                on_delta(delta_text)
-                    elif event_type == "conversation.item.input_audio_transcription.completed":
-                        transcript = str(event.get("transcript", "") or "").strip()
-                        if transcript:
-                            transcripts.append(transcript)
-                            if on_delta is not None and not saw_delta_since_completed:
-                                on_delta(transcript + " ")
-                        saw_delta_since_completed = False
-                    elif event_type == "error":
-                        err_obj = event.get("error", {})
-                        if isinstance(err_obj, dict):
-                            err_msg = str(
-                                err_obj.get("message")
-                                or err_obj.get("type")
-                                or "unknown realtime error"
-                            )
-                        else:
-                            err_msg = str(err_obj)
-                        raise RuntimeError(f"Realtime error: {err_msg}")
-
-                transcript_text = " ".join(part for part in transcripts if part).strip()
-                if transcript_text:
-                    return transcript_text
-                partial_text = "".join(partials).strip()
-                if partial_text:
-                    return partial_text
-        except Exception as exc:  # pylint: disable=broad-except
-            last_error = exc
-            continue
-
-    if last_error:
-        log("[GPT-4o Realtime error]", last_error)
-        model_list = ", ".join(model_candidates)
-        log(
-            "[Realtime]",
-            f"Server VAD model candidates tried: {model_list}.",
-        )
-    return ""
-
-
-def transcribe_with_gpt4o_realtime_stream(
-    audio_queue: "queue.Queue[np.ndarray]",
-    stop_event: threading.Event,
-    on_delta: Callable[[str], None] | None = None,
-) -> str:
-    text = transcribe_with_gpt4o_realtime_stream_server_vad(
-        audio_queue,
-        stop_event,
-        on_delta=on_delta,
-    )
-    if not text:
-        log("[Realtime] Server-side realtime produced no transcript.")
-    return text
 
 
 def transcribe_audio(chunks: list, engine: str, recorded_model: str | None = None) -> str:
-    normalized = normalize_transcription_engine(engine)
-    if normalized == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
-        return transcribe_with_gpt4o_realtime(chunks)
+    if normalize_transcription_engine(engine) == TRANSCRIPTION_ENGINE_LIVE:
+        return ""
     return transcribe_with_whisper(chunks, recorded_model)
 
 
@@ -2361,7 +2080,7 @@ def start_listening(
         post_process_instruction_profile = state.post_process_instruction_profile
     label = "Dictate" if mode == MODE_DICTATION else "Log"
     action = "Tap" if toggle_mode else "Hold"
-    use_realtime_streaming = transcription_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME
+    use_realtime_streaming = transcription_engine == TRANSCRIPTION_ENGINE_LIVE
     realtime_worker: threading.Thread | None = None
     realtime_queue: queue.Queue[np.ndarray] | None = None
     realtime_stop_event: threading.Event | None = None
@@ -2402,7 +2121,7 @@ def start_listening(
         def run_realtime_stream() -> None:
             assert realtime_queue is not None
             assert realtime_stop_event is not None
-            realtime_result["text"] = transcribe_with_gpt4o_realtime_stream(
+            realtime_result["text"] = transcribe_with_gpt_live_stream(
                 realtime_queue,
                 realtime_stop_event,
                 on_delta=on_delta_text,
@@ -2537,7 +2256,7 @@ def start_listening(
                     "[Realtime] Check network stability and realtime model access for your API key."
                 )
                 transcript_text = ""
-                transcription_engine_used = TRANSCRIPTION_ENGINE_GPT4O_REALTIME
+                transcription_engine_used = TRANSCRIPTION_ENGINE_LIVE
             else:
                 transcript_text = (realtime_result.get("text", "") or "").strip()
                 if not transcript_text:
@@ -2545,17 +2264,15 @@ def start_listening(
                     log(
                         "[Realtime] Strict mode keeps realtime-only behavior; no Whisper fallback is applied."
                     )
-                    transcription_engine_used = TRANSCRIPTION_ENGINE_GPT4O_REALTIME
+                    transcription_engine_used = TRANSCRIPTION_ENGINE_LIVE
         else:
             transcript_text = transcribe_audio(
                 chunks,
                 transcription_engine,
                 recorded_transcription_model,
             )
-            if (
-                transcription_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME and transcript_text
-            ) or transcription_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
-                transcription_engine_used = TRANSCRIPTION_ENGINE_GPT4O_REALTIME
+            if transcription_engine == TRANSCRIPTION_ENGINE_LIVE:
+                transcription_engine_used = TRANSCRIPTION_ENGINE_LIVE
         processed_text = transcript_text
         archive_entry_id: int | None = None
         post_process_status = "not_requested"
@@ -2571,8 +2288,8 @@ def start_listening(
                 audio_source=audio_source,
                 transcription_engine=transcription_engine_used,
                 transcription_model=(
-                    REALTIME_TRANSCRIBE_MODEL
-                    if transcription_engine_used == TRANSCRIPTION_ENGINE_GPT4O_REALTIME
+                    LIVE_TRANSCRIBE_MODEL
+                    if transcription_engine_used == TRANSCRIPTION_ENGINE_LIVE
                     else recorded_transcription_model
                 ),
                 post_processing_enabled=post_processing_enabled,
@@ -3157,7 +2874,7 @@ def toggle_dictation_history(_icon=None, _item=None) -> None:
 
 def set_transcription_engine(engine: str) -> None:
     normalized = normalize_transcription_engine(engine)
-    if normalized == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
+    if normalized == TRANSCRIPTION_ENGINE_LIVE:
         dep_error = realtime_dependency_error()
         if dep_error:
             log("[Transcription engine]", dep_error)
@@ -3168,8 +2885,8 @@ def set_transcription_engine(engine: str) -> None:
     with state.lock:
         recorded_model = state.recorded_transcription_model
     log(f"[Transcription engine] {transcription_engine_label(normalized, recorded_model)}")
-    if normalized == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
-        log("[Transcription engine] Strict server-side realtime mode enabled (no local fallback).")
+    if normalized == TRANSCRIPTION_ENGINE_LIVE:
+        log("[Transcription engine] GPT Live Transcribe streaming enabled.")
     refresh_tray_menu()
 
 
@@ -3179,6 +2896,16 @@ def set_recorded_transcription_model(model: str) -> None:
         state.recorded_transcription_model = normalized
     save_settings_to_disk()
     log(f"[Transcription model] {recorded_transcription_model_label(normalized)}")
+    refresh_tray_menu()
+
+
+def select_recorded_transcription_model(model: str) -> None:
+    normalized = normalize_recorded_transcription_model(model)
+    with state.lock:
+        state.transcription_engine = TRANSCRIPTION_ENGINE_RECORDED
+        state.recorded_transcription_model = normalized
+    save_settings_to_disk()
+    log(f"[Transcription] Recorded with {recorded_transcription_model_label(normalized)}.")
     refresh_tray_menu()
 
 
@@ -3350,7 +3077,7 @@ def apply_default_preset(_icon=None, _item=None) -> None:
         state.punctuation_terminal = True
         state.punctuation_capitalize = False
         state.punctuation_normalize_spaces = False
-        state.transcription_engine = TRANSCRIPTION_ENGINE_WHISPER
+        state.transcription_engine = TRANSCRIPTION_ENGINE_RECORDED
         state.recorded_transcription_model = normalize_recorded_transcription_model(
             DEFAULT_RECORDED_TRANSCRIBE_MODEL
         )
@@ -3476,48 +3203,42 @@ def build_input_device_menu() -> pystray.Menu:
 
 
 def build_transcription_menu() -> pystray.Menu:
+    recorded_items = [
+        pystray.MenuItem(
+            recorded_transcription_model_label(model_name),
+            make_recorded_model_action(model_name),
+            radio=True,
+            checked=make_recorded_model_checked(model_name),
+        )
+        for model_name in RECORDED_TRANSCRIBE_MODEL_OPTIONS
+    ]
     return pystray.Menu(
+        *recorded_items,
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem(
-            "Record then paste",
-            lambda _icon, _item: set_transcription_engine(TRANSCRIPTION_ENGINE_WHISPER),
+            "GPT Live Transcribe",
+            lambda _icon, _item: set_transcription_engine(TRANSCRIPTION_ENGINE_LIVE),
             radio=True,
-            checked=lambda _item: state.transcription_engine == TRANSCRIPTION_ENGINE_WHISPER,
-        ),
-        pystray.MenuItem(
-            "GPT-4o Realtime",
-            lambda _icon, _item: set_transcription_engine(TRANSCRIPTION_ENGINE_GPT4O_REALTIME),
-            radio=True,
-            checked=lambda _item: state.transcription_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME,
+            checked=lambda _item: state.transcription_engine == TRANSCRIPTION_ENGINE_LIVE,
         ),
     )
 
 
 def make_recorded_model_action(model_name: str):
     def action(_icon, _item):
-        set_recorded_transcription_model(model_name)
+        select_recorded_transcription_model(model_name)
 
     return action
 
 
 def make_recorded_model_checked(model_name: str):
     def checked(_item):
-        return state.recorded_transcription_model == model_name
+        return (
+            state.transcription_engine == TRANSCRIPTION_ENGINE_RECORDED
+            and state.recorded_transcription_model == model_name
+        )
 
     return checked
-
-
-def build_recorded_transcription_model_menu() -> pystray.Menu:
-    return pystray.Menu(
-        *[
-            pystray.MenuItem(
-                recorded_transcription_model_label(model_name),
-                make_recorded_model_action(model_name),
-                radio=True,
-                checked=make_recorded_model_checked(model_name),
-            )
-            for model_name in RECORDED_TRANSCRIBE_MODEL_OPTIONS
-        ]
-    )
 
 
 def make_post_process_model_action(model_name: str):
@@ -3593,18 +3314,11 @@ def compact_menu_value(value: str, max_length: int = 42) -> str:
     return f"{normalized[: max_length - 3].rstrip()}..."
 
 
-def current_transcription_mode_label() -> str:
+def current_transcription_label() -> str:
     with state.lock:
         engine = state.transcription_engine
-    if engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
-        return "GPT-4o Realtime"
-    return "Record then paste"
-
-
-def current_recorded_model_label() -> str:
-    with state.lock:
         model = state.recorded_transcription_model
-    return recorded_transcription_model_label(model)
+    return transcription_engine_label(engine, model)
 
 
 def current_post_process_model_label() -> str:
@@ -3619,33 +3333,63 @@ def current_post_process_instruction_label() -> str:
     return POST_PROCESS_INSTRUCTION_LABELS.get(profile, profile)
 
 
-def build_more_settings_menu() -> pystray.Menu:
+def build_text_behavior_menu() -> pystray.Menu:
     return pystray.Menu(
-        pystray.MenuItem(f"Work log hotkey: {HOTKEY_WORKLOG}", None, enabled=False),
+        pystray.MenuItem(
+            "Tap to start / stop",
+            toggle_toggle_mode,
+            checked=lambda _item: state.toggle_mode_enabled,
+        ),
+        pystray.MenuItem("Text output", build_punctuation_menu()),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Beeps", toggle_beeps, checked=lambda _item: state.beeps_enabled),
+        pystray.MenuItem(
+            "Status tooltip", toggle_tooltip, checked=lambda _item: state.tooltip_enabled
+        ),
+        pystray.MenuItem(
+            "Mute monitor", toggle_monitor, checked=lambda _item: state.monitor_enabled
+        ),
+    )
+
+
+def build_cleanup_settings_menu() -> pystray.Menu:
+    return pystray.Menu(
+        pystray.MenuItem(
+            f"Model: {current_post_process_model_label()}",
+            build_post_process_model_menu(),
+        ),
+        pystray.MenuItem(
+            f"Instructions: {current_post_process_instruction_label()}",
+            build_post_process_instruction_menu(),
+        ),
+    )
+
+
+def build_shortcuts_startup_menu() -> pystray.Menu:
+    return pystray.Menu(
+        pystray.MenuItem(
+            f"Dictation: {compact_menu_value(dictation_hotkey_summary(), 28)}...",
+            prompt_for_hotkey,
+        ),
+        pystray.MenuItem(f"Work log: {HOTKEY_WORKLOG}", None, enabled=False),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem(
             "Run at login",
             toggle_run_on_startup,
             checked=lambda _item: is_run_on_startup_enabled(),
         ),
+    )
+
+
+def build_history_menu() -> pystray.Menu:
+    return pystray.Menu(
+        pystray.MenuItem("Open transcript browser", open_transcript_browser),
+        pystray.MenuItem("Open legacy text log", open_work_log),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem(
-            "Save legacy transcript history",
+            "Save legacy text log",
             toggle_dictation_history,
             checked=lambda _item: state.dictation_history_enabled,
-        ),
-        pystray.MenuItem(
-            "Beeps",
-            toggle_beeps,
-            checked=lambda _item: state.beeps_enabled,
-        ),
-        pystray.MenuItem(
-            "Status tooltip",
-            toggle_tooltip,
-            checked=lambda _item: state.tooltip_enabled,
-        ),
-        pystray.MenuItem(
-            "Mute monitor",
-            toggle_monitor,
-            checked=lambda _item: state.monitor_enabled,
         ),
     )
 
@@ -3691,48 +3435,28 @@ def build_punctuation_menu() -> pystray.Menu:
 def build_menu() -> pystray.Menu:
     return pystray.Menu(
         pystray.MenuItem(
-            "GPT post-processing",
+            "GPT cleanup",
             toggle_post_processing,
             checked=lambda _item: state.post_processing_enabled,
         ),
         pystray.MenuItem(
-            "Tap to start / stop",
-            toggle_toggle_mode,
-            checked=lambda _item: state.toggle_mode_enabled,
+            f"Cleanup settings: {current_post_process_model_label()}",
+            build_cleanup_settings_menu(),
         ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(
-            f"Input device: {current_input_device_label()}",
-            build_input_device_menu(),
-        ),
-        pystray.MenuItem(
-            f"Transcription mode: {current_transcription_mode_label()}",
+            f"Transcription: {current_transcription_label()}",
             build_transcription_menu(),
         ),
         pystray.MenuItem(
-            f"Recorded model: {current_recorded_model_label()}",
-            build_recorded_transcription_model_menu(),
+            f"Audio input: {current_input_device_label()}",
+            build_input_device_menu(),
         ),
-        pystray.MenuItem(
-            f"GPT model: {current_post_process_model_label()}",
-            build_post_process_model_menu(),
-        ),
-        pystray.MenuItem(
-            f"GPT instructions: {current_post_process_instruction_label()}",
-            build_post_process_instruction_menu(),
-        ),
-        pystray.MenuItem("Text output", build_punctuation_menu()),
+        pystray.MenuItem("Text & behavior", build_text_behavior_menu()),
+        pystray.MenuItem("Shortcuts & startup", build_shortcuts_startup_menu()),
+        pystray.MenuItem("History", build_history_menu()),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem(
-            f"Dictation hotkey: {compact_menu_value(dictation_hotkey_summary(), 28)}...",
-            prompt_for_hotkey,
-        ),
-        pystray.MenuItem("More settings", build_more_settings_menu()),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Open transcript browser", open_transcript_browser),
-        pystray.MenuItem("Open transcript history", open_work_log),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Restart service", restart_app),
+        pystray.MenuItem("Restart", restart_app),
         pystray.MenuItem("Quit", quit_app),
     )
 
@@ -3914,8 +3638,8 @@ def tray_setup(_icon: TrayIconLike) -> None:
         f"Push-to-talk ready. {HOTKEY_DICTATION} for dictation/paste, "
         f"{HOTKEY_WORKLOG} for work log. Engine: {engine_label}."
     )
-    if selected_engine == TRANSCRIPTION_ENGINE_GPT4O_REALTIME:
-        log("[Transcription engine] Strict server-side realtime mode enabled (no local fallback).")
+    if selected_engine == TRANSCRIPTION_ENGINE_LIVE:
+        log("[Transcription engine] GPT Live Transcribe streaming enabled.")
     log(
         f"[Tray] Backend {pystray.Icon.__module__}; runtime updates:"
         f" {'disabled' if APPINDICATOR_BACKEND else 'enabled'}; log file: {LOG_PATH}"

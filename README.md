@@ -4,7 +4,7 @@ Push-to-talk Transcription
 Hold a hotkey to record from your microphone, transcribe audio, and paste
 the transcript into the active window. A second hotkey logs dictations as
 timestamped work entries. The app runs from a compact system tray menu with a
-flat set of common controls and one submenu for less common preferences.
+task-focused controls with infrequent preferences grouped into submenus.
 
 This repository is standalone. It does not depend on Personal Package Manager,
 although external launchers can still start it by pointing at this checkout.
@@ -18,10 +18,9 @@ Features
 - Configurable dictation hotkey: set a single key or key combo from the tray menu.
 - Shift-modified dictation: hold `Shift` while pressing the dictation hotkey to capture system audio instead of the microphone.
 - Work log capture: record and append a timestamped entry to `work_log.txt`.
-- Transcription mode toggle: choose record-then-paste or GPT-4o Realtime from the tray menu.
-- Recorded model selector: choose GPT-4o Transcribe, GPT-4o Mini Transcribe, or Whisper for the record-then-paste path.
+- Unified transcription selector: choose GPT Transcribe, GPT-4o Transcribe, GPT-4o Mini Transcribe, Whisper, or GPT Live Transcribe from one tray submenu.
 - Optional GPT post-processing: revise finished transcripts before paste or work-log output, with selectable models and instruction profiles.
-- Realtime live dictation: GPT-4o Realtime streams server-side transcript deltas while you are still holding the hotkey.
+- Realtime live dictation: GPT Live Transcribe streams server-side transcript deltas while you are still holding the hotkey and commits the turn on release.
 - Transcription preferences are saved and restored on next launch.
 - GPT post-processing is off by default and falls back to the original transcript if the additional API call fails or returns no text.
 - Tray controls expose common toggles and active selections directly, alongside transcript browsing, restart, and quit actions.
@@ -48,41 +47,38 @@ Hotkeys
 
 Tray Menu
 ---------
-- GPT post-processing: one-click checkbox for the additional text-revision call.
-- Tap to start / stop: one-click alternative to hold-to-record.
-- Input device, transcription mode, recorded model, GPT model, and GPT instructions are direct submenus. Each label shows the active selection.
-- Text output: paste suffix and punctuation behavior.
-- Dictation hotkey: shows the current binding and opens the capture dialog directly.
-- More settings: work-log hotkey, startup, legacy transcript history, beeps, status tooltip, and mute monitor.
-- Open transcript browser: starts a private `127.0.0.1` web interface and opens it in the default browser. Raw and final text appear side by side, with search and per-entry deletion.
-- Open transcript history: opens `work_log.txt`.
-- Restart service: restarts the systemd user service when managed by systemd, otherwise waits for the current tray instance to exit before relaunching the tracked entry point.
+- GPT cleanup: one-click checkbox for the additional text-revision call; model and instructions live together under Cleanup settings.
+- Transcription: one radio list for all recorded models and GPT Live Transcribe. Choosing a recorded model also switches back to recorded mode.
+- Audio input: shared microphone/input device selection and device refresh.
+- Text & behavior: tap-to-toggle, paste suffix, punctuation, beeps, tooltip, and mute monitor.
+- Shortcuts & startup: dictation binding, work-log binding, and run-at-login.
+- History: opens the local transcript browser or legacy text log and controls legacy text logging.
+- Restart: restarts the systemd user service when managed by systemd, otherwise waits for the current tray instance to exit before relaunching the tracked entry point.
 - Quit: exits the tray app, or stops the systemd user service when managed by systemd.
 
 Controls:
 - Dictation hotkey: opens a small capture window, shows the drafted key combo, then saves it only after you click `Accept`.
-- Recorded model:
-  - Whisper: default recorded model for the original conservative boot-time behavior.
+- Transcription:
+  - GPT Transcribe: default and recommended high-accuracy recorded model.
+  - Whisper: legacy recorded model.
   - GPT-4o Transcribe: optional quality/latency trade-off for the record-then-paste path.
   - GPT-4o Mini Transcribe: usually fastest recorded model.
-- Transcription mode:
-  - Record then paste: transcribes after key release and preserves the original clipboard/paste workflow.
-  - GPT-4o Realtime: strict server-side websocket transcription with server VAD; streams deltas while recording, then finalizes on release.
-- GPT post-processing is a root checkbox that turns the additional text-revision call on or off immediately. It is off by default.
+  - GPT Live Transcribe: streams one transcription session while recording and explicitly commits it when the trigger is released.
+- GPT cleanup is a root checkbox that turns the additional text-revision call on or off immediately. It is off by default.
 - GPT model and instructions:
   - Model: choose GPT-5.6 Luna (fast), Terra (balanced), or Sol (highest quality).
   - Instructions: choose Clean up speech, Make concise, Light touch, or Custom instructions.
   - Edit custom instructions...: appears in the instructions submenu and opens the local `post_process_instructions.txt` file. The app creates it on first use and rereads it for every custom-profile request, so edits do not require a restart.
-  - Applies to both pasted dictation and work-log entries. If post-processing is enabled with GPT-4o Realtime, live typing is withheld until the revised final text is ready.
+  - Applies to both pasted dictation and work-log entries. If cleanup is enabled with GPT Live Transcribe, live typing is withheld until the revised final text is ready.
 - Text output:
   - Suffix: None / Space / Newline (affects pasted dictation only).
   - Ensure terminal punctuation (adds "." if missing; enabled by default).
   - Capitalize first letter.
   - Normalize whitespace.
-- More settings -> Run at login: installs or removes the platform startup hook for the current checkout.
-- More settings -> Save legacy transcript history: on by default; when enabled, each final dictation is appended to `work_log.txt`.
+- Shortcuts & startup -> Run at login: installs or removes the platform startup hook for the current checkout.
+- History -> Save legacy text log: on by default; when enabled, each final dictation is appended to `work_log.txt`.
   This controls only the legacy text file; the raw/final SQLite archive remains always on.
-- Refresh devices appears at the bottom of the Input device submenu.
+- Refresh devices appears at the bottom of the Audio input submenu.
 
 Setup
 -----
@@ -123,7 +119,7 @@ For debugging, run the same script with `--foreground`.
 
 Run on startup
 --------------
-The easiest path is the tray menu: open `More settings` -> `Run at login`.
+The easiest path is the tray menu: open `Shortcuts & startup` -> `Run at login`.
 
 That toggle writes the right startup hook for the current platform:
 - Linux: a user systemd service in `~/.config/systemd/user/`
@@ -182,22 +178,17 @@ Configuration
 Environment variables:
 
 - `OPENAI_API_KEY` (required): OpenAI API key with speech-to-text access.
-- `OPENAI_TRANSCRIBE_MODEL` (optional): recorded-transcription model, default `gpt-4o-transcribe`.
+- `OPENAI_TRANSCRIBE_MODEL` (optional): recorded-transcription model, default `gpt-transcribe`.
 - `OPENAI_TRANSCRIBE_PROMPT` (optional): punctuation/style hint for recorded transcription.
 - `OPENAI_WHISPER_MODEL` / `OPENAI_WHISPER_PROMPT` are still accepted as legacy aliases.
-- `TRANSCRIPTION_ENGINE` (optional): `whisper` (default) or `gpt4o_realtime`.
-- `OPENAI_REALTIME_TRANSCRIBE_MODEL` (optional): defaults to `gpt-4o-transcribe`.
-- `OPENAI_REALTIME_SESSION_MODEL` (optional): preferred realtime transcription model override (for example `gpt-4o-transcribe`).
-- `OPENAI_REALTIME_TRANSCRIBE_LANGUAGE` (optional): ISO-639-1 language hint.
-- `OPENAI_REALTIME_TRANSCRIBE_PROMPT` (optional): transcription prompt for realtime mode.
+- `TRANSCRIPTION_ENGINE` (optional): `recorded` (default) or `live`. Legacy values migrate to recorded mode.
+- `OPENAI_LIVE_TRANSCRIBE_LANGUAGES` (optional): comma-separated language hints such as `en,fr`.
+- `OPENAI_LIVE_TRANSCRIBE_PROMPT` (optional): contextual vocabulary or names for live transcription.
+- `OPENAI_LIVE_TRANSCRIBE_DELAY` (optional): live model latency preference, default `low`.
 - `OPENAI_REALTIME_WS_URL` (optional): websocket URL for realtime transcription, default `wss://api.openai.com/v1/realtime?intent=transcription`.
-- `OPENAI_REALTIME_WS_USE_BETA_HEADER` (optional): `0` (default) uses GA websocket headers; set to `1` only if you intentionally need legacy beta header behavior.
 - `OPENAI_POST_PROCESS_MODEL` (optional): initial GPT post-processing model, default `gpt-5.6-luna`; tray selections are persisted in `settings.json`.
 - `OPENAI_POST_PROCESS_INSTRUCTIONS_PATH` (optional): custom instruction file path, default `post_process_instructions.txt` beside the app.
 - `REALTIME_LIVE_TYPING` (optional): `1` (default) enables live delta typing for dictation, `0` disables it.
-- `REALTIME_SERVER_VAD_THRESHOLD` (optional): server VAD threshold, default `0.5`.
-- `REALTIME_SERVER_VAD_PREFIX_MS` (optional): server VAD prefix padding in ms, default `300`.
-- `REALTIME_SERVER_VAD_SILENCE_MS` (optional): server VAD silence duration in ms, default `700`.
 - `PUSH_TO_TALK_SETTINGS_PATH` (optional): override path for persisted tray settings (`settings.json` by default).
 - `PUSH_TO_TALK_TRANSCRIPT_DB_PATH` (optional): override the always-on SQLite archive path (`transcripts.db` beside the app by default).
 - `DICTATION_HOTKEY` (optional): single-key trigger for dictation, default `F13`.
@@ -257,6 +248,5 @@ Notes and tips
 - Tray icon color: green when idle, red for microphone recording, blue for system-audio recording, orange while transcribing, and magenta while GPT post-processing. Non-AppIndicator backends use a crisp comet ring plus an animated waveform for transcription and sparkle for GPT work; color changes settle over two target-dominant frames without delaying the state change.
 - While an earlier transcript is still processing, you can start a new recording; completed dictations are pasted in the order the recordings started.
 - Realtime live typing applies only to dictation mode and may need app focus to stay in the target field.
-- GPT-4o Realtime is hard-switched to server-side mode (no local chunking and no Whisper fallback inside realtime mode).
-- If realtime dependencies are missing, GPT-4o Realtime selection logs an install hint and stays on record-then-paste mode.
-- VAD auto-stop and retry queues are not implemented yet.
+- GPT Live Transcribe has no fallback model or local chunking path. A failed live session is logged instead of silently changing transcription engines.
+- If realtime dependencies are missing, GPT Live Transcribe selection logs an install hint and stays on recorded mode.
