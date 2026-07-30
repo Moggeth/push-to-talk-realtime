@@ -13,7 +13,6 @@ Notes
 - Requires OPENAI_API_KEY with speech-to-text access in the environment or a .env file.
 """
 
-import base64
 import json
 import os
 import platform
@@ -74,6 +73,15 @@ from text_processing import (
 )
 from text_processing import prepare_clipboard_text as prepare_clipboard_text_core
 from transcript_browser import TranscriptBrowserServer, launch_transcript_browser
+from transcription_engines import (
+    LiveTranscriptionConfig,
+    RecordedTranscriptionConfig,
+    build_live_session_update as build_live_session_update_core,
+    resample_pcm16_mono as resample_pcm16_mono_core,
+    run_live_session as run_live_session_core,
+    transcribe_live_stream as transcribe_live_stream_core,
+    transcribe_recording,
+)
 from transcript_store import TranscriptStore
 from tray_visuals import (
     TRAY_ACTIVITY_FINALIZING,
@@ -1958,36 +1966,20 @@ def transcribe_with_whisper(chunks: list, model_name: str | None = None) -> str:
     if not chunks:
         return ""
     try:
-        import io
-        import wave
-
-        client = get_openai_client()
-        pcm = np.concatenate(chunks, axis=0)
-        wav_bytes = io.BytesIO()
-        with wave.open(wav_bytes, "wb") as wf:
-            wf.setnchannels(CHANNELS)
-            wf.setsampwidth(2)  # int16
-            wf.setframerate(SAMPLE_RATE)
-            wf.writeframes(pcm.tobytes())
-        wav_bytes.seek(0)
-        wav_bytes.name = "recording.wav"  # hint format to the API
         if model_name is None:
             with state.lock:
                 model_name = state.recorded_transcription_model
         model_name = normalize_recorded_transcription_model(model_name)
-
-        request_args: dict[str, Any] = {
-            "model": model_name,
-            "file": wav_bytes,
-            "response_format": "json",
-        }
-        if RECORDED_TRANSCRIBE_PROMPT:
-            request_args["prompt"] = RECORDED_TRANSCRIBE_PROMPT
-
-        response = client.audio.transcriptions.create(
-            **request_args,
+        return transcribe_recording(
+            chunks,
+            RecordedTranscriptionConfig(
+                model=model_name,
+                prompt=RECORDED_TRANSCRIBE_PROMPT,
+                sample_rate=SAMPLE_RATE,
+                channels=CHANNELS,
+            ),
+            get_openai_client(),
         )
-        return getattr(response, "text", "") or ""
     except Exception as exc:  # pylint: disable=broad-except
         log("[Recorded transcription error]", exc)
         return ""
@@ -1995,50 +1987,26 @@ def transcribe_with_whisper(chunks: list, model_name: str | None = None) -> str:
 
 # -------------------- Orchestration --------------------
 def resample_pcm16_mono(pcm: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
-    if pcm.size == 0:
-        return np.array([], dtype=np.int16)
-    if src_rate == dst_rate:
-        return pcm.astype(np.int16, copy=False)
-    src = pcm.astype(np.float32)
-    src_index = np.arange(src.shape[0], dtype=np.float32)
-    dst_len = max(1, round(src.shape[0] * dst_rate / src_rate))
-    dst_index = np.linspace(0, max(0, src.shape[0] - 1), num=dst_len, dtype=np.float32)
-    dst = np.interp(dst_index, src_index, src)
-    return np.clip(np.round(dst), -32768, 32767).astype(np.int16)
+    return resample_pcm16_mono_core(pcm, src_rate, dst_rate)
+
+
+def live_transcription_config() -> LiveTranscriptionConfig:
+    return LiveTranscriptionConfig(
+        api_key=OPENAI_API_KEY,
+        websocket_url=REALTIME_WS_URL,
+        model=LIVE_TRANSCRIBE_MODEL,
+        source_sample_rate=SAMPLE_RATE,
+        input_sample_rate=REALTIME_INPUT_SAMPLE_RATE,
+        languages=LIVE_TRANSCRIBE_LANGUAGES,
+        prompt=LIVE_TRANSCRIBE_PROMPT,
+        delay=LIVE_TRANSCRIBE_DELAY,
+        session_ready_timeout_s=LIVE_SESSION_READY_TIMEOUT_S,
+        final_timeout_s=LIVE_FINAL_TIMEOUT_S,
+    )
 
 
 def build_live_transcription_session_update_event() -> dict[str, Any]:
-    session: dict[str, Any] = {
-        "type": "transcription",
-        "audio": {
-            "input": {
-                "format": {"type": "audio/pcm", "rate": REALTIME_INPUT_SAMPLE_RATE},
-                "transcription": {
-                    "model": LIVE_TRANSCRIBE_MODEL,
-                },
-                "turn_detection": None,
-            }
-        },
-    }
-    transcription = session["audio"]["input"]["transcription"]
-    if LIVE_TRANSCRIBE_LANGUAGES:
-        transcription["languages"] = list(LIVE_TRANSCRIBE_LANGUAGES)
-    if LIVE_TRANSCRIBE_PROMPT:
-        transcription["prompt"] = LIVE_TRANSCRIBE_PROMPT
-    if LIVE_TRANSCRIBE_DELAY:
-        transcription["delay"] = LIVE_TRANSCRIBE_DELAY
-    return {
-        "type": "session.update",
-        "session": session,
-    }
-
-
-def _live_realtime_error_message(event: dict[str, Any]) -> str:
-    error = event.get("error", {})
-    if not isinstance(error, dict):
-        return str(error)
-    parts = [error.get("type"), error.get("code"), error.get("message")]
-    return ": ".join(str(part) for part in parts if part) or "unknown realtime error"
+    return build_live_session_update_core(live_transcription_config())
 
 
 def run_live_transcription_session(
@@ -2047,85 +2015,13 @@ def run_live_transcription_session(
     stop_event: threading.Event,
     on_delta: Callable[[str], None] | None = None,
 ) -> str:
-    ws.send(json.dumps(build_live_transcription_session_update_event()))
-    session_ready_deadline = time.monotonic() + LIVE_SESSION_READY_TIMEOUT_S
-    session_ready = False
-    committed = False
-    sent_audio = False
-    final_deadline = 0.0
-    partials_by_item: dict[str, list[str]] = {}
-    completed_by_item: dict[str, str] = {}
-
-    while True:
-        if session_ready and not committed:
-            while True:
-                try:
-                    chunk = audio_queue.get_nowait()
-                except queue.Empty:
-                    break
-                if not chunk.size:
-                    continue
-                pcm = resample_pcm16_mono(
-                    chunk.astype(np.int16, copy=False),
-                    SAMPLE_RATE,
-                    REALTIME_INPUT_SAMPLE_RATE,
-                )
-                if not pcm.size:
-                    continue
-                ws.send(
-                    json.dumps(
-                        {
-                            "type": "input_audio_buffer.append",
-                            "audio": base64.b64encode(pcm.tobytes()).decode("ascii"),
-                        }
-                    )
-                )
-                sent_audio = True
-
-            if stop_event.is_set() and audio_queue.empty():
-                if not sent_audio:
-                    return ""
-                ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                committed = True
-                final_deadline = time.monotonic() + LIVE_FINAL_TIMEOUT_S
-
-        now = time.monotonic()
-        if not session_ready and now >= session_ready_deadline:
-            raise TimeoutError("GPT Live Transcribe session did not become ready")
-        if committed and now >= final_deadline:
-            raise TimeoutError("GPT Live Transcribe did not return a completed transcript")
-
-        try:
-            message = ws.recv(timeout=0.05)
-        except TimeoutError:
-            continue
-        if message is None:
-            continue
-        if isinstance(message, bytes):
-            message = message.decode("utf-8", errors="replace")
-        event = json.loads(message)
-        event_type = str(event.get("type", ""))
-        if event_type == "error":
-            raise RuntimeError(f"GPT Live Transcribe error: {_live_realtime_error_message(event)}")
-        if event_type == "session.updated":
-            session_ready = True
-            continue
-        if event_type == "conversation.item.input_audio_transcription.delta":
-            item_id = str(event.get("item_id", "") or "default")
-            delta = str(event.get("delta", "") or "")
-            if delta:
-                partials_by_item.setdefault(item_id, []).append(delta)
-                if on_delta is not None:
-                    on_delta(delta)
-            continue
-        if event_type == "conversation.item.input_audio_transcription.completed":
-            item_id = str(event.get("item_id", "") or "default")
-            transcript = str(event.get("transcript", "") or "").strip()
-            completed_by_item[item_id] = transcript
-            if on_delta is not None and transcript and not partials_by_item.get(item_id):
-                on_delta(transcript)
-            if committed:
-                return " ".join(text for text in completed_by_item.values() if text).strip()
+    return run_live_session_core(
+        ws,
+        audio_queue,
+        stop_event,
+        live_transcription_config(),
+        on_delta,
+    )
 
 
 def transcribe_with_gpt_live_stream(
@@ -2138,17 +2034,13 @@ def transcribe_with_gpt_live_stream(
         log("[GPT Live Transcribe]", dep_error)
         return ""
     try:
-        from websockets.sync.client import connect
-
         log(f"[GPT Live Transcribe] Connecting to {REALTIME_WS_URL}.")
-        with connect(
-            REALTIME_WS_URL,
-            additional_headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            open_timeout=LIVE_SESSION_READY_TIMEOUT_S,
-            close_timeout=2,
-            max_size=2**22,
-        ) as ws:
-            return run_live_transcription_session(ws, audio_queue, stop_event, on_delta)
+        return transcribe_live_stream_core(
+            audio_queue,
+            stop_event,
+            live_transcription_config(),
+            on_delta,
+        )
     except Exception as exc:  # pylint: disable=broad-except
         log("[GPT Live Transcribe error]", exc)
         return ""
