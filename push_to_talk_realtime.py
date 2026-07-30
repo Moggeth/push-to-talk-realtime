@@ -118,15 +118,11 @@ DEFAULT_TRANSCRIPTION_PROMPT = (
 )
 RECORDED_TRANSCRIBE_MODEL_OPTIONS = (
     "gpt-transcribe",
-    "gpt-4o-transcribe",
-    "gpt-4o-mini-transcribe",
     "whisper-1",
 )
 RECORDED_TRANSCRIBE_MODEL_LABELS = {
-    "gpt-transcribe": "GPT Transcribe (recommended)",
-    "gpt-4o-transcribe": "GPT-4o Transcribe",
-    "gpt-4o-mini-transcribe": "GPT-4o Mini Transcribe",
-    "whisper-1": "Whisper",
+    "gpt-transcribe": "GPT Transcribe (backup)",
+    "whisper-1": "Whisper (legacy)",
 }
 DEFAULT_RECORDED_TRANSCRIBE_MODEL = (
     os.getenv("OPENAI_TRANSCRIBE_MODEL") or os.getenv("OPENAI_WHISPER_MODEL") or "gpt-transcribe"
@@ -156,7 +152,7 @@ REALTIME_WS_URL = os.getenv(
 TRANSCRIPTION_ENGINE_RECORDED = "recorded"
 TRANSCRIPTION_ENGINE_LIVE = "live"
 DEFAULT_TRANSCRIPTION_ENGINE = (
-    os.getenv("TRANSCRIPTION_ENGINE", TRANSCRIPTION_ENGINE_RECORDED).strip().lower()
+    os.getenv("TRANSCRIPTION_ENGINE", TRANSCRIPTION_ENGINE_LIVE).strip().lower()
 )
 REALTIME_INPUT_SAMPLE_RATE = 24000
 REALTIME_LIVE_TYPING_ENABLED = os.getenv("REALTIME_LIVE_TYPING", "1").strip().lower() not in {
@@ -233,7 +229,32 @@ WORKLOG_TAP_MAX_S = 0.25
 SCRIPT_DIR = Path(__file__).resolve().parent
 STARTER_SCRIPT_PATH = SCRIPT_DIR / "start_push_to_talk.py"
 WORK_LOG_PATH = Path(os.getenv("WORK_LOG_PATH") or (SCRIPT_DIR / "work_log.txt"))
-SETTINGS_PATH = Path(os.getenv("PUSH_TO_TALK_SETTINGS_PATH") or (SCRIPT_DIR / "settings.json"))
+
+
+def default_settings_path(
+    system_name: str | None = None,
+    environment: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> Path:
+    system_name = system_name or platform.system()
+    environment = environment if environment is not None else os.environ
+    home = home or Path.home()
+    if system_name == "Windows":
+        root = environment.get("LOCALAPPDATA") or environment.get("APPDATA")
+        return (
+            Path(root) / "PushToTalkRealtime" / "settings.json"
+            if root
+            else (home / "AppData" / "Local" / "PushToTalkRealtime" / "settings.json")
+        )
+    if system_name == "Darwin":
+        return home / "Library" / "Application Support" / "PushToTalkRealtime" / "settings.json"
+    config_root = Path(environment.get("XDG_CONFIG_HOME") or (home / ".config"))
+    return config_root / "push-to-talk-realtime" / "settings.json"
+
+
+DEFAULT_SETTINGS_PATH = default_settings_path()
+LEGACY_SETTINGS_PATH = SCRIPT_DIR / "settings.json"
+SETTINGS_PATH = Path(os.getenv("PUSH_TO_TALK_SETTINGS_PATH") or DEFAULT_SETTINGS_PATH)
 LOG_PATH = Path(os.getenv("PUSH_TO_TALK_LOG_PATH") or (SCRIPT_DIR / "push_to_talk_realtime.log"))
 TRANSCRIPT_DB_PATH = Path(
     os.getenv("PUSH_TO_TALK_TRANSCRIPT_DB_PATH") or (SCRIPT_DIR / "transcripts.db")
@@ -270,12 +291,15 @@ def normalize_recorded_transcription_model(model: str) -> str:
     normalized = (model or "").strip().lower()
     aliases = {
         "gpt": "gpt-transcribe",
-        "gpt4o": "gpt-4o-transcribe",
-        "gpt-4o": "gpt-4o-transcribe",
-        "4o": "gpt-4o-transcribe",
-        "mini": "gpt-4o-mini-transcribe",
-        "gpt4o-mini": "gpt-4o-mini-transcribe",
-        "gpt-4o-mini": "gpt-4o-mini-transcribe",
+        "gpt4o": "gpt-transcribe",
+        "gpt-4o": "gpt-transcribe",
+        "4o": "gpt-transcribe",
+        "gpt-4o-transcribe": "gpt-transcribe",
+        "mini": "gpt-transcribe",
+        "gpt4o-mini": "gpt-transcribe",
+        "gpt-4o-mini": "gpt-transcribe",
+        "gpt-4o-mini-transcribe": "gpt-transcribe",
+        "gpt-4o-transcribe-mini": "gpt-transcribe",
         "whisper": "whisper-1",
     }
     normalized = aliases.get(normalized, normalized)
@@ -676,15 +700,33 @@ def startup_context() -> StartupContext:
 
 def load_settings_from_disk() -> dict[str, Any]:
     try:
-        if not SETTINGS_PATH.exists():
+        source_path = SETTINGS_PATH
+        migrating_legacy_settings = (
+            SETTINGS_PATH == DEFAULT_SETTINGS_PATH
+            and not SETTINGS_PATH.exists()
+            and LEGACY_SETTINGS_PATH.exists()
+        )
+        if migrating_legacy_settings:
+            source_path = LEGACY_SETTINGS_PATH
+        if not source_path.exists():
             return {}
-        raw = SETTINGS_PATH.read_text(encoding="utf-8")
+        raw = source_path.read_text(encoding="utf-8")
         parsed = json.loads(raw)
         if isinstance(parsed, dict):
+            if migrating_legacy_settings:
+                write_settings_payload(parsed)
+                log(f"[Settings] Migrated settings to {SETTINGS_PATH}.")
             return parsed
     except Exception as exc:  # pylint: disable=broad-except
         log("[Settings] Unable to load settings:", exc)
     return {}
+
+
+def write_settings_payload(payload: dict[str, Any]) -> None:
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = SETTINGS_PATH.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temp_path.replace(SETTINGS_PATH)
 
 
 def save_settings_to_disk() -> None:
@@ -702,10 +744,7 @@ def save_settings_to_disk() -> None:
             "worklog_hotkey": HOTKEY_WORKLOG,
         }
     try:
-        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = SETTINGS_PATH.with_suffix(".tmp")
-        temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        temp_path.replace(SETTINGS_PATH)
+        write_settings_payload(payload)
     except Exception as exc:  # pylint: disable=broad-except
         log("[Settings] Unable to save settings:", exc)
 
@@ -714,7 +753,9 @@ def apply_persisted_settings() -> None:
     global HOTKEY_DICTATION, HOTKEY_WORKLOG
 
     settings = load_settings_from_disk()
-    engine = normalize_transcription_engine(str(settings.get("transcription_engine", "")))
+    engine = normalize_transcription_engine(
+        str(settings.get("transcription_engine") or DEFAULT_TRANSCRIPTION_ENGINE)
+    )
     recorded_model = normalize_recorded_transcription_model(
         str(settings.get("transcription_model") or DEFAULT_RECORDED_TRANSCRIBE_MODEL)
     )
@@ -1000,6 +1041,7 @@ def enforce_transcription_engine_dependencies() -> None:
         log("[Transcription engine]", dep_error)
         with state.lock:
             state.transcription_engine = TRANSCRIPTION_ENGINE_RECORDED
+            state.recorded_transcription_model = "gpt-transcribe"
 
 
 def paste_text(text: str, target: PasteTarget | None = None):
@@ -3411,14 +3453,14 @@ def build_transcription_menu() -> pystray.Menu:
         for model_name in RECORDED_TRANSCRIBE_MODEL_OPTIONS
     ]
     return pystray.Menu(
-        *recorded_items,
-        pystray.Menu.SEPARATOR,
         pystray.MenuItem(
-            "GPT Live Transcribe",
+            "GPT Live Transcribe (default)",
             lambda _icon, _item: set_transcription_engine(TRANSCRIPTION_ENGINE_LIVE),
             radio=True,
             checked=lambda _item: state.transcription_engine == TRANSCRIPTION_ENGINE_LIVE,
         ),
+        pystray.Menu.SEPARATOR,
+        *recorded_items,
     )
 
 

@@ -47,6 +47,8 @@ class HotkeySessionStartTests(unittest.TestCase):
             push_to_talk.state.post_processing_session_count = 0
             push_to_talk.state.post_process_model = "gpt-5.6-luna"
             push_to_talk.state.post_process_instruction_profile = "clean_up"
+            push_to_talk.state.transcription_engine = push_to_talk.TRANSCRIPTION_ENGINE_RECORDED
+            push_to_talk.state.recorded_transcription_model = "gpt-transcribe"
             push_to_talk.state.active_hotkey = ""
             push_to_talk.state.active_hotkey_kind = ""
             push_to_talk.state.active_hotkey_tokens = ()

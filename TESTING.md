@@ -57,7 +57,7 @@ CI now runs:
   - Clipboard paste flow, work-log append behavior, and tray status updates.
   - Keyboard and mouse hotkey press/release transitions, double-tap work-log handling, and toggle mode stop behavior.
   - First-press startup race handling: a release that arrives while a session is still starting is remembered and stops the new recording cleanly.
-  - Persisted dictation hotkey kind/tokens, GPT Transcribe recorded-model default, migration of the removed GPT-4o Realtime setting, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, grouped menu hierarchy and bounded active-value labels, tray startup/shutdown, and `main()` bootstrap wiring.
+  - Persisted dictation hotkey kind/tokens, GPT Live default, archived GPT-4o model migration to GPT Transcribe, checkout-to-user-data settings migration, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, grouped menu hierarchy and bounded active-value labels, tray startup/shutdown, and `main()` bootstrap wiring.
   - GPT Live Transcribe session configuration, 16-to-24 kHz audio streaming, append/commit ordering, completed transcript reconciliation, and structured API errors.
   - Extracted transcription-engine compatibility through the app boundary, including recorded request payloads and realtime websocket events.
   - Warm microphone stream lifecycle, bounded pre-roll ordering, first-audio measurement, and static realtime finalizing visuals.
@@ -196,7 +196,7 @@ CI now runs:
 - Expected: dictation + work log reflect the settings on the next run.
 
 10) Unified transcription selector
-- Open `Transcription: <current>` and switch among GPT Transcribe, GPT-4o Transcribe, GPT-4o Mini Transcribe, Whisper, and GPT Live Transcribe.
+- Open `Transcription: <current>` and switch among GPT Live Transcribe, GPT Transcribe, and Whisper.
 - Expected: selecting any recorded model switches to record-then-paste and uses that model on the next dictation.
 - Expected: selecting GPT Live Transcribe switches to streaming with no automatic recorded-model fallback.
 
@@ -204,6 +204,8 @@ CI now runs:
 - Select GPT Live Transcribe, exit app, and relaunch it.
 - Expected: the tray still shows GPT Live Transcribe selected.
 - Then select Whisper, relaunch again, and confirm Whisper remains selected in recorded mode.
+- Update or replace the repository checkout and relaunch.
+- Expected: the previous selection is retained from the platform user-data settings file.
 
 12) Dictation hotkey persistence
 - Use `Set Hotkey...` to save a new dictation key or combo, exit the app, relaunch it.

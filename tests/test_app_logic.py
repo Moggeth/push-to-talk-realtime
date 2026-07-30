@@ -130,6 +130,7 @@ def test_default_dictation_hotkey_is_mouse_remap_f13():
     fresh_state = app.SessionState()
 
     assert app.DEFAULT_HOTKEY_DICTATION == "F13"
+    assert fresh_state.transcription_engine == app.TRANSCRIPTION_ENGINE_LIVE
     assert fresh_state.dictation_hotkey_tokens == ("F13",)
     assert fresh_state.dictation_hotkey_label == "F13"
 
@@ -560,7 +561,7 @@ def test_apply_persisted_settings_loads_hotkeys_and_engine(monkeypatch, tmp_path
     app.apply_persisted_settings()
 
     assert app.state.transcription_engine == app.TRANSCRIPTION_ENGINE_RECORDED
-    assert app.state.recorded_transcription_model == "gpt-4o-mini-transcribe"
+    assert app.state.recorded_transcription_model == "gpt-transcribe"
     assert app.HOTKEY_DICTATION == "F15"
     assert app.HOTKEY_WORKLOG == "F16"
     assert app.state.dictation_hotkey_kind == app.HOTKEY_KIND_KEYBOARD
@@ -570,6 +571,66 @@ def test_apply_persisted_settings_loads_hotkeys_and_engine(monkeypatch, tmp_path
     assert app.state.post_processing_enabled is True
     assert app.state.post_process_model == "gpt-5.6-terra"
     assert app.state.post_process_instruction_profile == "concise"
+
+
+def test_default_settings_path_uses_platform_user_data_locations(tmp_path: Path):
+    assert (
+        app.default_settings_path(
+            "Windows",
+            {"LOCALAPPDATA": str(tmp_path / "Local")},
+            tmp_path,
+        )
+        == tmp_path / "Local" / "PushToTalkRealtime" / "settings.json"
+    )
+    assert app.default_settings_path("Darwin", {}, tmp_path) == (
+        tmp_path / "Library" / "Application Support" / "PushToTalkRealtime" / "settings.json"
+    )
+    assert app.default_settings_path("Linux", {}, tmp_path) == (
+        tmp_path / ".config" / "push-to-talk-realtime" / "settings.json"
+    )
+
+
+def test_load_settings_migrates_legacy_checkout_file(monkeypatch, tmp_path: Path):
+    settings_path = tmp_path / "user-data" / "settings.json"
+    legacy_path = tmp_path / "checkout" / "settings.json"
+    legacy_path.parent.mkdir()
+    expected = {
+        "transcription_engine": app.TRANSCRIPTION_ENGINE_LIVE,
+        "transcription_model": "gpt-transcribe",
+    }
+    legacy_path.write_text(json.dumps(expected), encoding="utf-8")
+    monkeypatch.setattr(app, "DEFAULT_SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(app, "SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(app, "LEGACY_SETTINGS_PATH", legacy_path)
+
+    assert app.load_settings_from_disk() == expected
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == expected
+
+
+def test_missing_settings_uses_live_default(monkeypatch, tmp_path: Path):
+    settings_path = tmp_path / "user-data" / "settings.json"
+    monkeypatch.setattr(app, "DEFAULT_SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(app, "SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(app, "LEGACY_SETTINGS_PATH", tmp_path / "missing-legacy.json")
+    monkeypatch.setattr(app, "HOTKEY_DICTATION", app.DEFAULT_HOTKEY_DICTATION)
+    monkeypatch.setattr(app, "HOTKEY_WORKLOG", app.DEFAULT_HOTKEY_WORKLOG)
+
+    app.apply_persisted_settings()
+
+    assert app.state.transcription_engine == app.TRANSCRIPTION_ENGINE_LIVE
+    assert app.state.recorded_transcription_model == "gpt-transcribe"
+
+
+def test_live_dependency_failure_uses_gpt_transcribe_backup(monkeypatch):
+    monkeypatch.setattr(app, "realtime_dependency_error", lambda: "websocket unavailable")
+    with app.state.lock:
+        app.state.transcription_engine = app.TRANSCRIPTION_ENGINE_LIVE
+        app.state.recorded_transcription_model = "whisper-1"
+
+    app.enforce_transcription_engine_dependencies()
+
+    assert app.state.transcription_engine == app.TRANSCRIPTION_ENGINE_RECORDED
+    assert app.state.recorded_transcription_model == "gpt-transcribe"
 
 
 def test_save_settings_to_disk_includes_hotkeys(monkeypatch, tmp_path: Path):
@@ -611,14 +672,16 @@ def test_recorded_transcription_model_aliases_and_selector(monkeypatch):
 
     assert app.SessionState().recorded_transcription_model == "gpt-transcribe"
     assert app.normalize_recorded_transcription_model("whisper") == "whisper-1"
-    assert app.normalize_recorded_transcription_model("gpt-4o") == "gpt-4o-transcribe"
+    assert app.normalize_recorded_transcription_model("gpt-4o") == "gpt-transcribe"
+    assert app.normalize_recorded_transcription_model("gpt-4o-transcribe") == "gpt-transcribe"
+    assert app.normalize_recorded_transcription_model("gpt-4o-mini-transcribe") == "gpt-transcribe"
     assert app.normalize_recorded_transcription_model("gpt") == "gpt-transcribe"
     assert app.normalize_recorded_transcription_model("unknown-model") == "gpt-transcribe"
 
     app.select_recorded_transcription_model("gpt-4o-mini-transcribe")
 
     assert app.state.transcription_engine == app.TRANSCRIPTION_ENGINE_RECORDED
-    assert app.state.recorded_transcription_model == "gpt-4o-mini-transcribe"
+    assert app.state.recorded_transcription_model == "gpt-transcribe"
     assert refresh_calls == ["refresh"]
 
 
@@ -626,12 +689,10 @@ def test_transcription_menu_lists_recorded_models_and_live_option():
     menu = app.build_transcription_menu()
 
     assert [item.text for item in menu] == [
-        "GPT Transcribe (recommended)",
-        "GPT-4o Transcribe",
-        "GPT-4o Mini Transcribe",
-        "Whisper",
+        "GPT Live Transcribe (default)",
         "- - - -",
-        "GPT Live Transcribe",
+        "GPT Transcribe (backup)",
+        "Whisper (legacy)",
     ]
 
 
@@ -1134,7 +1195,7 @@ def test_update_tray_tooltip_includes_status_mode_device_and_muted_warning():
     app.update_tray_tooltip()
 
     assert app.tray_icon.title == (
-        f"{app.TRAY_TITLE} - Listening (Worklog, USB Mic, GPT Transcribe (recommended), Muted?)"
+        f"{app.TRAY_TITLE} - Listening (Worklog, USB Mic, GPT Live Transcribe, Muted?)"
     )
 
 
@@ -1150,8 +1211,7 @@ def test_update_tray_tooltip_identifies_system_audio_source():
     app.update_tray_tooltip()
 
     assert app.tray_icon.title == (
-        f"{app.TRAY_TITLE} - Listening "
-        "(Dictation, System audio, Stereo Mix, GPT Transcribe (recommended))"
+        f"{app.TRAY_TITLE} - Listening (Dictation, System audio, Stereo Mix, GPT Live Transcribe)"
     )
 
 
@@ -1166,7 +1226,7 @@ def test_update_tray_tooltip_identifies_gpt_post_processing():
     app.update_tray_tooltip()
 
     assert app.tray_icon.title == (
-        f"{app.TRAY_TITLE} - Post-processing (Dictation, GPT Transcribe (recommended))"
+        f"{app.TRAY_TITLE} - Post-processing (Dictation, GPT Live Transcribe)"
     )
 
 
@@ -1185,7 +1245,7 @@ def test_tray_status_signature_uses_persisted_recorded_model():
 
     signature = app.current_tray_status_signature()
 
-    assert signature[4] == "GPT-4o Mini Transcribe"
+    assert signature[4] == "GPT Transcribe (backup)"
 
 
 def test_update_tray_icon_uses_listening_color(monkeypatch):
@@ -1987,8 +2047,9 @@ def test_tray_setup_marks_icon_visible_and_starts_listener(monkeypatch):
     assert logs == [
         (
             f"Push-to-talk ready. {app.HOTKEY_DICTATION} for dictation/paste, "
-            f"{app.HOTKEY_WORKLOG} for work log. Engine: GPT Transcribe (recommended)."
+            f"{app.HOTKEY_WORKLOG} for work log. Engine: GPT Live Transcribe."
         ),
+        "[Transcription engine] GPT Live Transcribe streaming enabled.",
         (
             f"[Tray] Backend {app.pystray.Icon.__module__}; runtime updates:"
             f" {'disabled' if app.APPINDICATOR_BACKEND else 'enabled'}; log file: {app.LOG_PATH}"

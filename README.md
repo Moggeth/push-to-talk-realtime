@@ -18,7 +18,7 @@ Features
 - Configurable dictation hotkey: set a single key or key combo from the tray menu.
 - Shift-modified dictation: hold `Shift` while pressing the dictation hotkey to capture system audio instead of the microphone.
 - Work log capture: record and append a timestamped entry to `work_log.txt`.
-- Unified transcription selector: choose GPT Transcribe, GPT-4o Transcribe, GPT-4o Mini Transcribe, Whisper, or GPT Live Transcribe from one tray submenu.
+- Unified transcription selector: GPT Live Transcribe is the default, GPT Transcribe is the recorded backup, and Whisper remains available as a legacy option.
 - Optional GPT post-processing: revise finished transcripts before paste or work-log output, with selectable models and instruction profiles.
 - Realtime live dictation: GPT Live Transcribe streams server-side transcript deltas while you are still holding the hotkey and commits the turn on release.
 - Transcription preferences are saved and restored on next launch.
@@ -60,11 +60,10 @@ Tray Menu
 Controls:
 - Dictation hotkey: opens a small capture window, shows the drafted key combo, then saves it only after you click `Accept`.
 - Transcription:
-  - GPT Transcribe: default and recommended high-accuracy recorded model.
-  - Whisper: legacy recorded model.
-  - GPT-4o Transcribe: optional quality/latency trade-off for the record-then-paste path.
-  - GPT-4o Mini Transcribe: usually fastest recorded model.
-  - GPT Live Transcribe: streams one transcription session while recording and explicitly commits it when the trigger is released.
+  - GPT Live Transcribe: default; streams one transcription session while recording and explicitly commits it when the trigger is released.
+  - GPT Transcribe: recorded backup used when live dependencies are unavailable.
+  - Whisper: legacy recorded option.
+  - Saved GPT-4o Transcribe and GPT-4o Mini Transcribe selections migrate to GPT Transcribe.
 - GPT cleanup is a root checkbox that turns the additional text-revision call on or off immediately. It is off by default.
 - GPT model and instructions:
   - Model: choose GPT-5.6 Luna (fast), Terra (balanced), or Sol (highest quality).
@@ -201,7 +200,7 @@ Environment variables:
 - `OPENAI_TRANSCRIBE_MODEL` (optional): recorded-transcription model, default `gpt-transcribe`.
 - `OPENAI_TRANSCRIBE_PROMPT` (optional): punctuation/style hint for recorded transcription.
 - `OPENAI_WHISPER_MODEL` / `OPENAI_WHISPER_PROMPT` are still accepted as legacy aliases.
-- `TRANSCRIPTION_ENGINE` (optional): `recorded` (default) or `live`. Legacy values migrate to recorded mode.
+- `TRANSCRIPTION_ENGINE` (optional): `live` (default) or `recorded`. Legacy realtime values migrate to recorded mode.
 - `OPENAI_LIVE_TRANSCRIBE_LANGUAGES` (optional): comma-separated language hints such as `en,fr`.
 - `OPENAI_LIVE_TRANSCRIBE_PROMPT` (optional): contextual vocabulary or names for live transcription.
 - `OPENAI_LIVE_TRANSCRIBE_DELAY` (optional): live model latency preference, default `low`.
@@ -209,7 +208,7 @@ Environment variables:
 - `OPENAI_POST_PROCESS_MODEL` (optional): initial GPT post-processing model, default `gpt-5.6-luna`; tray selections are persisted in `settings.json`.
 - `OPENAI_POST_PROCESS_INSTRUCTIONS_PATH` (optional): custom instruction file path, default `post_process_instructions.txt` beside the app.
 - `REALTIME_LIVE_TYPING` (optional): `1` (default) enables live delta typing for dictation, `0` disables it.
-- `PUSH_TO_TALK_SETTINGS_PATH` (optional): override path for persisted tray settings (`settings.json` by default).
+- `PUSH_TO_TALK_SETTINGS_PATH` (optional): override the platform user-data path used for persisted tray settings.
 - `PUSH_TO_TALK_TRANSCRIPT_DB_PATH` (optional): override the always-on SQLite archive path (`transcripts.db` beside the app by default).
 - `DICTATION_HOTKEY` (optional): single-key trigger for dictation, default `F13`.
 - `WORKLOG_HOTKEY` (optional): single-key trigger for work log capture, default `F14`.
@@ -241,6 +240,7 @@ it reconnects.
 
 Notes and tips
 --------------
+- Tray selections are stored outside the checkout so pulls and application updates do not reset them. On Windows the default is `%LOCALAPPDATA%\PushToTalkRealtime\settings.json`; the first launch migrates an existing checkout-local `settings.json` automatically. macOS uses `~/Library/Application Support/PushToTalkRealtime/settings.json`, and Linux uses `${XDG_CONFIG_HOME:-~/.config}/push-to-talk-realtime/settings.json`.
 - Paste uses the standard shortcut for your platform: `Ctrl+V` on Windows/Linux
   and `Cmd+V` on macOS.
 - On Windows, record-then-paste remembers the focused control when dictation
