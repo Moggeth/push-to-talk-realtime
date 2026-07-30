@@ -2237,6 +2237,202 @@ def finish_capture_session(session_id: int) -> CaptureTimestamps:
     return timestamps
 
 
+@dataclass(frozen=True)
+class TranscriptionOutcome:
+    final_text: str
+    engine_used: str
+    transcription_ms: float
+    audio_duration_s: float
+    error: Exception | None = None
+
+
+def finalize_session_transcription(
+    *,
+    chunks: list[np.ndarray],
+    mode: str,
+    audio_source: str,
+    transcription_engine: str,
+    recorded_model: str,
+    post_processing_enabled: bool,
+    post_process_model: str,
+    post_process_instruction_profile: str,
+    realtime_worker: threading.Thread | None,
+    realtime_stop_event: threading.Event | None,
+    realtime_result: dict[str, str],
+) -> TranscriptionOutcome:
+    use_realtime = transcription_engine == TRANSCRIPTION_ENGINE_LIVE
+    mark_transcription_started(live_finalizing=use_realtime)
+    log(
+        "\n[Transcribing] "
+        f"{transcription_engine_label(transcription_engine, recorded_model)} request sent..."
+    )
+    audio_duration_s = sum(len(chunk) for chunk in chunks) / SAMPLE_RATE if chunks else 0.0
+    started_at = time.perf_counter()
+    transcript_text = ""
+    engine_used = transcription_engine
+    final_text = ""
+    error: Exception | None = None
+    try:
+        if use_realtime and realtime_worker is not None and realtime_stop_event is not None:
+            realtime_stop_event.set()
+            join_timeout_s = max(6.0, min(20.0, audio_duration_s + 4.0))
+            realtime_worker.join(timeout=join_timeout_s)
+            if realtime_worker.is_alive():
+                log("[Realtime] Stream worker timed out; strict server-side mode will not fall back.")
+                log("[Realtime] Check network stability and realtime model access for your API key.")
+            else:
+                transcript_text = (realtime_result.get("text", "") or "").strip()
+                if not transcript_text:
+                    log("[Realtime] No transcript returned from server-side realtime.")
+                    log(
+                        "[Realtime] Strict mode keeps realtime-only behavior; "
+                        "no Whisper fallback is applied."
+                    )
+        else:
+            transcript_text = transcribe_audio(chunks, transcription_engine, recorded_model)
+
+        processed_text = transcript_text
+        archive_entry_id: int | None = None
+        post_process_status = "not_requested"
+        post_process_error = ""
+        instructions = ""
+        if transcript_text.strip():
+            if post_processing_enabled:
+                instructions = post_process_instructions(post_process_instruction_profile)
+            archive_entry_id = archive_raw_transcript(
+                mode=mode,
+                audio_source=audio_source,
+                transcription_engine=engine_used,
+                transcription_model=(
+                    LIVE_TRANSCRIBE_MODEL
+                    if engine_used == TRANSCRIPTION_ENGINE_LIVE
+                    else recorded_model
+                ),
+                post_processing_enabled=post_processing_enabled,
+                post_process_model=post_process_model if post_processing_enabled else "",
+                instruction_profile=(
+                    post_process_instruction_profile if post_processing_enabled else ""
+                ),
+                instructions=instructions,
+                raw_text=transcript_text,
+            )
+        if post_processing_enabled and transcript_text.strip():
+            post_process_started_at = time.perf_counter()
+            mark_post_processing_started()
+            try:
+                processed_text = post_process_transcript(
+                    transcript_text,
+                    post_process_model,
+                    instructions,
+                )
+                if not processed_text:
+                    raise ValueError("GPT returned an empty transcript")
+                post_process_status = "completed"
+                elapsed_ms = (time.perf_counter() - post_process_started_at) * 1000.0
+                log(
+                    f"[Post-process] {post_process_model_label(post_process_model)} "
+                    f"completed in {elapsed_ms:.0f} ms."
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                processed_text = transcript_text
+                post_process_status = "failed"
+                post_process_error = str(exc)
+                log("[Post-process] Failed; using original transcript:", exc)
+            finally:
+                mark_post_processing_finished()
+        final_text = apply_punctuation_options(processed_text)
+        archive_final_transcript(
+            archive_entry_id,
+            final_text=final_text,
+            post_process_status=post_process_status,
+            post_process_error=post_process_error,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        error = exc
+        log("[Transcription error]", exc)
+    return TranscriptionOutcome(
+        final_text=final_text,
+        engine_used=engine_used,
+        transcription_ms=(time.perf_counter() - started_at) * 1000.0,
+        audio_duration_s=audio_duration_s,
+        error=error,
+    )
+
+
+def deliver_session_output(
+    *,
+    session_id: int,
+    mode: str,
+    outcome: TranscriptionOutcome,
+    recorded_model: str,
+    paste_target: PasteTarget | None,
+    live_typing_enabled: bool,
+    realtime_delta_parts: list[str],
+    realtime_delta_lock: threading.Lock,
+) -> None:
+    with state.output_condition:
+        waiting_for_earlier_output = session_id != state.next_output_session_id
+    if waiting_for_earlier_output:
+        log(f"[Session {session_id}] Waiting for earlier transcript output.")
+    wait_for_output_turn(session_id)
+    try:
+        with state.lock:
+            state.transcript_final = outcome.final_text
+        if outcome.error is not None:
+            log(f"[Session {session_id}] Transcription failed; skipping output.")
+            return
+
+        total_minutes = (outcome.audio_duration_s + outcome.transcription_ms / 1000.0) / 60.0
+        word_count = len(outcome.final_text.split())
+        wpm = word_count / total_minutes if total_minutes > 0 else 0.0
+        used_label = transcription_engine_label(outcome.engine_used, recorded_model)
+        log(
+            f"[Metrics] {used_label} {outcome.transcription_ms:.0f} ms | "
+            f"WPM {wpm:.1f} "
+            f"(words={word_count}, audio={outcome.audio_duration_s * 1000:.0f} ms)"
+        )
+
+        if not outcome.final_text:
+            log("\n(No speech captured.)")
+            return
+        if mode == MODE_WORKLOG:
+            append_work_log_entry(outcome.final_text)
+            return
+
+        with state.lock:
+            dictation_history_enabled = state.dictation_history_enabled
+        if dictation_history_enabled:
+            append_dictation_history_entry(outcome.final_text)
+        log("\n[Final]:", outcome.final_text)
+        if not PASTE_ON_RELEASE:
+            return
+        prepared_final = prepare_clipboard_text(outcome.final_text)
+        live_applied = False
+        live_text = ""
+        if live_typing_enabled:
+            with realtime_delta_lock:
+                live_text = "".join(realtime_delta_parts)
+            live_applied = try_apply_live_dictation_correction(live_text, prepared_final)
+            if live_applied:
+                log("[Realtime] Live dictation finalized in place.")
+        if live_typing_enabled and live_text and not live_applied:
+            log(
+                "[Realtime] Live text changed too much to auto-correct; "
+                "skipped final paste to avoid duplicates."
+            )
+        elif not live_applied:
+            if paste_text(outcome.final_text, paste_target):
+                log("[Pasted] Transcript output completed.")
+            else:
+                log("[Clipboard] Transcript copied, but paste was not sent.")
+    finally:
+        advance_output_turn()
+        mark_transcription_finished(
+            outcome.final_text,
+            live_finalizing=outcome.engine_used == TRANSCRIPTION_ENGINE_LIVE,
+        )
+
+
 def start_listening(
     mode: str,
     hotkey_name: str,
@@ -2408,181 +2604,29 @@ def start_listening(
 
     with buffer_lock:
         chunks = [chunk.copy() for chunk in record_buffer]
-
-    mark_transcription_started(live_finalizing=use_realtime_streaming)
-    log(
-        "\n[Transcribing] "
-        f"{transcription_engine_label(transcription_engine, recorded_transcription_model)} "
-        "request sent..."
+    outcome = finalize_session_transcription(
+        chunks=chunks,
+        mode=mode,
+        audio_source=audio_source,
+        transcription_engine=transcription_engine,
+        recorded_model=recorded_transcription_model,
+        post_processing_enabled=post_processing_enabled,
+        post_process_model=post_process_model,
+        post_process_instruction_profile=post_process_instruction_profile,
+        realtime_worker=realtime_worker,
+        realtime_stop_event=realtime_stop_event,
+        realtime_result=realtime_result,
     )
-
-    audio_duration_s = sum(len(chunk) for chunk in chunks) / SAMPLE_RATE if chunks else 0.0
-    transcribe_start = time.perf_counter()
-    transcript_text = ""
-    transcription_engine_used = transcription_engine
-    transcribe_error: Exception | None = None
-    final_text = ""
-    try:
-        if (
-            use_realtime_streaming
-            and realtime_worker is not None
-            and realtime_stop_event is not None
-        ):
-            realtime_stop_event.set()
-            join_timeout_s = max(6.0, min(20.0, audio_duration_s + 4.0))
-            realtime_worker.join(timeout=join_timeout_s)
-            if realtime_worker.is_alive():
-                log(
-                    "[Realtime] Stream worker timed out; strict server-side mode will not fall back."
-                )
-                log(
-                    "[Realtime] Check network stability and realtime model access for your API key."
-                )
-                transcript_text = ""
-                transcription_engine_used = TRANSCRIPTION_ENGINE_LIVE
-            else:
-                transcript_text = (realtime_result.get("text", "") or "").strip()
-                if not transcript_text:
-                    log("[Realtime] No transcript returned from server-side realtime.")
-                    log(
-                        "[Realtime] Strict mode keeps realtime-only behavior; no Whisper fallback is applied."
-                    )
-                    transcription_engine_used = TRANSCRIPTION_ENGINE_LIVE
-        else:
-            transcript_text = transcribe_audio(
-                chunks,
-                transcription_engine,
-                recorded_transcription_model,
-            )
-            if transcription_engine == TRANSCRIPTION_ENGINE_LIVE:
-                transcription_engine_used = TRANSCRIPTION_ENGINE_LIVE
-        processed_text = transcript_text
-        archive_entry_id: int | None = None
-        post_process_status = "not_requested"
-        post_process_error = ""
-        selected_post_process_instructions = ""
-        if transcript_text.strip():
-            if post_processing_enabled:
-                selected_post_process_instructions = post_process_instructions(
-                    post_process_instruction_profile
-                )
-            archive_entry_id = archive_raw_transcript(
-                mode=mode,
-                audio_source=audio_source,
-                transcription_engine=transcription_engine_used,
-                transcription_model=(
-                    LIVE_TRANSCRIBE_MODEL
-                    if transcription_engine_used == TRANSCRIPTION_ENGINE_LIVE
-                    else recorded_transcription_model
-                ),
-                post_processing_enabled=post_processing_enabled,
-                post_process_model=post_process_model if post_processing_enabled else "",
-                instruction_profile=(
-                    post_process_instruction_profile if post_processing_enabled else ""
-                ),
-                instructions=selected_post_process_instructions,
-                raw_text=transcript_text,
-            )
-        if post_processing_enabled and transcript_text.strip():
-            post_process_start = time.perf_counter()
-            mark_post_processing_started()
-            try:
-                processed_text = post_process_transcript(
-                    transcript_text,
-                    post_process_model,
-                    selected_post_process_instructions,
-                )
-                if not processed_text:
-                    raise ValueError("GPT returned an empty transcript")
-                post_process_status = "completed"
-                elapsed_ms = (time.perf_counter() - post_process_start) * 1000.0
-                log(
-                    f"[Post-process] {post_process_model_label(post_process_model)} "
-                    f"completed in {elapsed_ms:.0f} ms."
-                )
-            except Exception as exc:  # pylint: disable=broad-except
-                processed_text = transcript_text
-                post_process_status = "failed"
-                post_process_error = str(exc)
-                log("[Post-process] Failed; using original transcript:", exc)
-            finally:
-                mark_post_processing_finished()
-        final_text = apply_punctuation_options(processed_text)
-        archive_final_transcript(
-            archive_entry_id,
-            final_text=final_text,
-            post_process_status=post_process_status,
-            post_process_error=post_process_error,
-        )
-    except Exception as exc:  # pylint: disable=broad-except
-        transcribe_error = exc
-        log("[Transcription error]", exc)
-    transcribe_end = time.perf_counter()
-
-    transcription_ms = (transcribe_end - transcribe_start) * 1000.0
-    audio_minutes = audio_duration_s / 60.0
-    transcription_minutes = (transcribe_end - transcribe_start) / 60.0
-    total_minutes = audio_minutes + transcription_minutes
-    word_count = len(final_text.split())
-    wpm = word_count / total_minutes if total_minutes > 0 else 0.0
-
-    with state.output_condition:
-        waiting_for_earlier_output = session_id != state.next_output_session_id
-    if waiting_for_earlier_output:
-        log(f"[Session {session_id}] Waiting for earlier transcript output.")
-    wait_for_output_turn(session_id)
-    try:
-        with state.lock:
-            state.transcript_final = final_text
-
-        if transcribe_error is not None:
-            log(f"[Session {session_id}] Transcription failed; skipping output.")
-            return
-
-        used_label = transcription_engine_label(
-            transcription_engine_used,
-            recorded_transcription_model,
-        )
-        log(
-            f"[Metrics] {used_label} {transcription_ms:.0f} ms | "
-            f"WPM {wpm:.1f} (words={word_count}, audio={audio_duration_s * 1000:.0f} ms)"
-        )
-
-        if final_text:
-            if mode == MODE_WORKLOG:
-                append_work_log_entry(final_text)
-            else:
-                with state.lock:
-                    dictation_history_enabled = state.dictation_history_enabled
-                if dictation_history_enabled:
-                    append_dictation_history_entry(final_text)
-                log("\n[Final]:", final_text)
-                if PASTE_ON_RELEASE:
-                    prepared_final = prepare_clipboard_text(final_text)
-                    live_applied = False
-                    live_text = ""
-                    if live_typing_enabled:
-                        with realtime_delta_lock:
-                            live_text = "".join(realtime_delta_parts)
-                        live_applied = try_apply_live_dictation_correction(
-                            live_text, prepared_final
-                        )
-                        if live_applied:
-                            log("[Realtime] Live dictation finalized in place.")
-                    if live_typing_enabled and live_text and not live_applied:
-                        log(
-                            "[Realtime] Live text changed too much to auto-correct; skipped final paste to avoid duplicates."
-                        )
-                    elif not live_applied:
-                        if paste_text(final_text, paste_target):
-                            log("[Pasted] Transcript output completed.")
-                        else:
-                            log("[Clipboard] Transcript copied, but paste was not sent.")
-        else:
-            log("\n(No speech captured.)")
-    finally:
-        advance_output_turn()
-        mark_transcription_finished(final_text, live_finalizing=use_realtime_streaming)
+    deliver_session_output(
+        session_id=session_id,
+        mode=mode,
+        outcome=outcome,
+        recorded_model=recorded_transcription_model,
+        paste_target=paste_target,
+        live_typing_enabled=live_typing_enabled,
+        realtime_delta_parts=realtime_delta_parts,
+        realtime_delta_lock=realtime_delta_lock,
+    )
 
 
 # -------------------- Hotkey handling --------------------
