@@ -640,7 +640,7 @@ def test_save_settings_to_disk_includes_hotkeys(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(app, "HOTKEY_WORKLOG", "F18")
     with app.state.lock:
         app.state.transcription_engine = app.TRANSCRIPTION_ENGINE_RECORDED
-        app.state.recorded_transcription_model = "whisper-1"
+        app.state.recorded_transcription_model = "gpt-transcribe"
         app.state.dictation_hotkey_kind = app.HOTKEY_KIND_KEYBOARD
         app.state.dictation_hotkey_tokens = ("F17",)
         app.state.dictation_hotkey_label = "F17"
@@ -654,7 +654,7 @@ def test_save_settings_to_disk_includes_hotkeys(monkeypatch, tmp_path: Path):
     saved = json.loads(settings_path.read_text(encoding="utf-8"))
     assert saved == {
         "transcription_engine": app.TRANSCRIPTION_ENGINE_RECORDED,
-        "transcription_model": "whisper-1",
+        "transcription_model": "gpt-transcribe",
         "dictation_hotkey_kind": app.HOTKEY_KIND_KEYBOARD,
         "dictation_hotkey_tokens": ["F17"],
         "dictation_history_enabled": False,
@@ -671,7 +671,8 @@ def test_recorded_transcription_model_aliases_and_selector(monkeypatch):
     monkeypatch.setattr(app, "refresh_tray_menu", lambda: refresh_calls.append("refresh"))
 
     assert app.SessionState().recorded_transcription_model == "gpt-transcribe"
-    assert app.normalize_recorded_transcription_model("whisper") == "whisper-1"
+    assert app.normalize_recorded_transcription_model("whisper") == "gpt-transcribe"
+    assert app.normalize_recorded_transcription_model("whisper-1") == "gpt-transcribe"
     assert app.normalize_recorded_transcription_model("gpt-4o") == "gpt-transcribe"
     assert app.normalize_recorded_transcription_model("gpt-4o-transcribe") == "gpt-transcribe"
     assert app.normalize_recorded_transcription_model("gpt-4o-mini-transcribe") == "gpt-transcribe"
@@ -692,7 +693,6 @@ def test_transcription_menu_lists_recorded_models_and_live_option():
         "GPT Live Transcribe (default)",
         "- - - -",
         "GPT Transcribe (backup)",
-        "Whisper (legacy)",
     ]
 
 

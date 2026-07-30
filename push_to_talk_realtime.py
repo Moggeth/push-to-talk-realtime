@@ -116,13 +116,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 DEFAULT_TRANSCRIPTION_PROMPT = (
     "Transcribe exactly what is spoken. Use full sentence punctuation, including periods."
 )
-RECORDED_TRANSCRIBE_MODEL_OPTIONS = (
-    "gpt-transcribe",
-    "whisper-1",
-)
+RECORDED_TRANSCRIBE_MODEL_OPTIONS = ("gpt-transcribe",)
 RECORDED_TRANSCRIBE_MODEL_LABELS = {
     "gpt-transcribe": "GPT Transcribe (backup)",
-    "whisper-1": "Whisper (legacy)",
 }
 DEFAULT_RECORDED_TRANSCRIBE_MODEL = (
     os.getenv("OPENAI_TRANSCRIBE_MODEL") or os.getenv("OPENAI_WHISPER_MODEL") or "gpt-transcribe"
@@ -300,7 +296,8 @@ def normalize_recorded_transcription_model(model: str) -> str:
         "gpt-4o-mini": "gpt-transcribe",
         "gpt-4o-mini-transcribe": "gpt-transcribe",
         "gpt-4o-transcribe-mini": "gpt-transcribe",
-        "whisper": "whisper-1",
+        "whisper": "gpt-transcribe",
+        "whisper-1": "gpt-transcribe",
     }
     normalized = aliases.get(normalized, normalized)
     if normalized in RECORDED_TRANSCRIBE_MODEL_OPTIONS:
@@ -2332,7 +2329,7 @@ def finalize_session_transcription(
                     log("[Realtime] No transcript returned from server-side realtime.")
                     log(
                         "[Realtime] Strict mode keeps realtime-only behavior; "
-                        "no Whisper fallback is applied."
+                        "no recorded fallback is applied."
                     )
         else:
             transcript_text = transcribe_audio(chunks, transcription_engine, recorded_model)

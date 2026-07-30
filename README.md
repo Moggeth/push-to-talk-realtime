@@ -18,7 +18,7 @@ Features
 - Configurable dictation hotkey: set a single key or key combo from the tray menu.
 - Shift-modified dictation: hold `Shift` while pressing the dictation hotkey to capture system audio instead of the microphone.
 - Work log capture: record and append a timestamped entry to `work_log.txt`.
-- Unified transcription selector: GPT Live Transcribe is the default, GPT Transcribe is the recorded backup, and Whisper remains available as a legacy option.
+- Unified transcription selector: GPT Live Transcribe is the default and GPT Transcribe is the recorded backup.
 - Optional GPT post-processing: revise finished transcripts before paste or work-log output, with selectable models and instruction profiles.
 - Realtime live dictation: GPT Live Transcribe streams server-side transcript deltas while you are still holding the hotkey and commits the turn on release.
 - Transcription preferences are saved and restored on next launch.
@@ -62,8 +62,7 @@ Controls:
 - Transcription:
   - GPT Live Transcribe: default; streams one transcription session while recording and explicitly commits it when the trigger is released.
   - GPT Transcribe: recorded backup used when live dependencies are unavailable.
-  - Whisper: legacy recorded option.
-  - Saved GPT-4o Transcribe and GPT-4o Mini Transcribe selections migrate to GPT Transcribe.
+  - Saved GPT-4o Transcribe, GPT-4o Mini Transcribe, and Whisper selections migrate to GPT Transcribe.
 - GPT cleanup is a root checkbox that turns the additional text-revision call on or off immediately. It is off by default.
 - GPT model and instructions:
   - Model: choose GPT-5.6 Luna (fast), Terra (balanced), or Sol (highest quality).
