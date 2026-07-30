@@ -20,8 +20,10 @@ source = [
     "push_to_talk_realtime",
     "platform_input",
     "text_processing",
+    "transcription_engines",
     "transcript_store",
     "transcript_browser",
+    "tray_visuals",
 ]
 
 [tool.coverage.report]

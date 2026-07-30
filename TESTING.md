@@ -38,7 +38,7 @@ Expected result:
 4) Coverage gate (matches the Linux CI quality job)
 
 ```
-pytest -vv --cov=push_to_talk_realtime --cov=platform_input --cov=text_processing --cov=transcript_store --cov=transcript_browser --cov-report=term-missing
+pytest -vv --cov --cov-report=term-missing
 ```
 
 Expected result:
@@ -59,10 +59,12 @@ CI now runs:
   - First-press startup race handling: a release that arrives while a session is still starting is remembered and stops the new recording cleanly.
   - Persisted dictation hotkey kind/tokens, GPT Transcribe recorded-model default, migration of the removed GPT-4o Realtime setting, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, grouped menu hierarchy and bounded active-value labels, tray startup/shutdown, and `main()` bootstrap wiring.
   - GPT Live Transcribe session configuration, 16-to-24 kHz audio streaming, append/commit ordering, completed transcript reconciliation, and structured API errors.
+  - Extracted transcription-engine compatibility through the app boundary, including recorded request payloads and realtime websocket events.
   - Warm microphone stream lifecycle, bounded pre-roll ordering, first-audio measurement, and static realtime finalizing visuals.
   - GPT post-processing model/profile persistence, tray controls, custom instruction loading, Responses API payloads, blank-input handling, raw-transcript fallback on API failure, reference-counted processing state, target-dominant color transitions, and distinct activity animation frames.
   - Always-on SQLite transcript storage, raw-before-GPT ordering, finalization and failure status, search, deletion, HTML escaping, loopback browser requests, deletion-token validation, and browser shutdown.
   - Single-instance startup guard, hotkey-listener watchdog restart, and delayed restart helper behavior.
+  - Shared session lifecycle cleanup for pending starts, aborted capture, normal completion, and ordered transcript delivery.
 
 - `test_apply_punctuation_options_normalize_capitalize_terminal`
   - Input: `"  hello   world  "`

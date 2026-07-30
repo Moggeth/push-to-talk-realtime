@@ -163,8 +163,27 @@ pytest -vv
 Coverage gate used by CI:
 
 ```powershell
-pytest -vv --cov=push_to_talk_realtime --cov=platform_input --cov=text_processing --cov-report=term-missing
+pytest -vv --cov --cov-report=term-missing
 ```
+
+Architecture
+------------
+- `push_to_talk_realtime.py` owns application state, device selection, hotkeys,
+  the warm microphone stream, and the capture-session lifecycle. A session now
+  moves through explicit activation, recording, transcription, and ordered
+  output phases, with shared cleanup for abort and normal completion paths.
+- `transcription_engines.py` owns recorded WAV requests and the GPT Live
+  Transcribe websocket protocol. It has no tray, hotkey, or application-state
+  dependencies, so API contract changes can be tested independently.
+- `tray_visuals.py` is the pure icon renderer and color-transition helper.
+- `text_processing.py`, `transcript_store.py`, and `transcript_browser.py` own
+  final text rules and local transcript persistence/browsing respectively.
+- `platform_input.py` and `startup_integration.py` isolate platform-specific
+  paste/focus and startup behavior.
+
+Keep latency-sensitive warm microphone ownership in the main application unless
+an extraction preserves its single stream, bounded pre-roll, and first-audio
+metrics as one tested unit.
 
 GitHub Actions now runs:
 - A Linux quality job on Python 3.12 with Ruff plus a 70% coverage gate.

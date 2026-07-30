@@ -2278,8 +2278,12 @@ def finalize_session_transcription(
             join_timeout_s = max(6.0, min(20.0, audio_duration_s + 4.0))
             realtime_worker.join(timeout=join_timeout_s)
             if realtime_worker.is_alive():
-                log("[Realtime] Stream worker timed out; strict server-side mode will not fall back.")
-                log("[Realtime] Check network stability and realtime model access for your API key.")
+                log(
+                    "[Realtime] Stream worker timed out; strict server-side mode will not fall back."
+                )
+                log(
+                    "[Realtime] Check network stability and realtime model access for your API key."
+                )
             else:
                 transcript_text = (realtime_result.get("text", "") or "").strip()
                 if not transcript_text:
