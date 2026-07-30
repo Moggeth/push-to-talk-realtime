@@ -990,10 +990,6 @@ def realtime_dependency_error() -> str | None:
     return None
 
 
-def can_use_realtime_engine() -> bool:
-    return realtime_dependency_error() is None
-
-
 def enforce_transcription_engine_dependencies() -> None:
     with state.lock:
         engine = state.transcription_engine
@@ -3038,15 +3034,6 @@ def set_transcription_engine(engine: str) -> None:
     refresh_tray_menu()
 
 
-def set_recorded_transcription_model(model: str) -> None:
-    normalized = normalize_recorded_transcription_model(model)
-    with state.lock:
-        state.recorded_transcription_model = normalized
-    save_settings_to_disk()
-    log(f"[Transcription model] {recorded_transcription_model_label(normalized)}")
-    refresh_tray_menu()
-
-
 def select_recorded_transcription_model(model: str) -> None:
     normalized = normalize_recorded_transcription_model(model)
     with state.lock:
@@ -3212,27 +3199,6 @@ def toggle_run_on_startup(_icon=None, _item=None) -> None:
         "[Startup]",
         "Run on startup enabled." if not enabled else "Run on startup disabled.",
     )
-    refresh_tray_menu()
-
-
-def apply_default_preset(_icon=None, _item=None) -> None:
-    with state.lock:
-        state.beeps_enabled = False
-        state.tooltip_enabled = False
-        state.toggle_mode_enabled = False
-        state.monitor_enabled = False
-        state.paste_suffix_mode = DEFAULT_SUFFIX_MODE
-        state.punctuation_terminal = True
-        state.punctuation_capitalize = False
-        state.punctuation_normalize_spaces = False
-        state.transcription_engine = TRANSCRIPTION_ENGINE_RECORDED
-        state.recorded_transcription_model = normalize_recorded_transcription_model(
-            DEFAULT_RECORDED_TRANSCRIBE_MODEL
-        )
-        state.post_processing_enabled = False
-        state.post_process_model = normalize_post_process_model(DEFAULT_POST_PROCESS_MODEL)
-        state.post_process_instruction_profile = DEFAULT_POST_PROCESS_INSTRUCTION_PROFILE
-    save_settings_to_disk()
     refresh_tray_menu()
 
 

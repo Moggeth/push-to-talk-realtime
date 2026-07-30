@@ -615,8 +615,9 @@ def test_recorded_transcription_model_aliases_and_selector(monkeypatch):
     assert app.normalize_recorded_transcription_model("gpt") == "gpt-transcribe"
     assert app.normalize_recorded_transcription_model("unknown-model") == "gpt-transcribe"
 
-    app.set_recorded_transcription_model("gpt-4o-mini-transcribe")
+    app.select_recorded_transcription_model("gpt-4o-mini-transcribe")
 
+    assert app.state.transcription_engine == app.TRANSCRIPTION_ENGINE_RECORDED
     assert app.state.recorded_transcription_model == "gpt-4o-mini-transcribe"
     assert refresh_calls == ["refresh"]
 
