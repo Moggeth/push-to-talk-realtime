@@ -2051,6 +2051,45 @@ def transcribe_audio(chunks: list, engine: str, recorded_model: str | None = Non
 # -------------------- Orchestration --------------------
 
 
+@dataclass(frozen=True)
+class ActiveSession:
+    session_id: int
+    audio_source: str
+    start_requested_at: float
+
+
+@dataclass(frozen=True)
+class CaptureTimestamps:
+    start_requested_at: float
+    stream_ready_at: float
+    first_audio_at: float
+
+
+def _clear_pending_session_start_locked() -> None:
+    state.session_start_pending = False
+    state.pending_start_hotkey_kind = ""
+    state.pending_start_hotkey_tokens = ()
+    state.pending_start_stop_hotkey_tokens = ()
+    state.pending_start_stop_requested = False
+    state.pending_start_requested_at = 0.0
+
+
+def _clear_active_session_locked() -> None:
+    state.session_start_pending = False
+    state.is_listening = False
+    state.active_hotkey = ""
+    state.active_hotkey_kind = ""
+    state.active_hotkey_tokens = ()
+    state.active_stop_hotkey_tokens = ()
+    state.active_device_label = ""
+    state.active_audio_source = AUDIO_SOURCE_MICROPHONE
+    state.active_start_requested_at = 0.0
+    state.active_stream_ready_at = 0.0
+    state.active_first_audio_at = 0.0
+    state.should_stop = False
+    state.muted_warning = False
+
+
 def session_stop_hotkey_tokens(
     mode: str,
     hotkey_tokens: tuple[str, ...],
@@ -2092,55 +2131,22 @@ def begin_session_start(
         ).start()
     except Exception:
         with state.lock:
-            state.session_start_pending = False
-            state.pending_start_hotkey_kind = ""
-            state.pending_start_hotkey_tokens = ()
-            state.pending_start_stop_hotkey_tokens = ()
-            state.pending_start_stop_requested = False
-            state.pending_start_requested_at = 0.0
+            _clear_pending_session_start_locked()
         raise
     return True
 
 
-def start_listening(
+def activate_session(
     mode: str,
     hotkey_name: str,
     hotkey_kind: str,
     hotkey_tokens: tuple[str, ...],
-    device_index: int | None,
     device_label: str,
-):
-    if not OPENAI_API_KEY:
-        log("ERROR: OPENAI_API_KEY not set.")
-        with state.lock:
-            state.session_start_pending = False
-            state.pending_start_hotkey_kind = ""
-            state.pending_start_hotkey_tokens = ()
-            state.pending_start_stop_hotkey_tokens = ()
-            state.pending_start_stop_requested = False
-            state.pending_start_requested_at = 0.0
-        return
-    enforce_transcription_engine_dependencies()
-    paste_target = capture_paste_target() if mode == MODE_DICTATION else None
-    if paste_target is not None:
-        log(
-            "[Paste] Remembered target "
-            f"hwnd={paste_target.focus_hwnd} class={paste_target.focus_class_name!r}."
-        )
-
-    label_text = device_label or DEFAULT_DEVICE_LABEL
-    record_buffer: list[np.ndarray] = []
-    buffer_lock = threading.Lock()
-
+) -> ActiveSession | None:
     with state.lock:
         if state.is_listening:
-            state.session_start_pending = False
-            state.pending_start_hotkey_kind = ""
-            state.pending_start_hotkey_tokens = ()
-            state.pending_start_stop_hotkey_tokens = ()
-            state.pending_start_stop_requested = False
-            state.pending_start_requested_at = 0.0
-            return
+            _clear_pending_session_start_locked()
+            return None
         stop_hotkey_tokens = session_stop_hotkey_tokens(
             mode,
             hotkey_tokens,
@@ -2155,12 +2161,7 @@ def start_listening(
         state.session_counter += 1
         session_id = state.session_counter
         state.active_session_id = session_id
-        state.session_start_pending = False
-        state.pending_start_hotkey_kind = ""
-        state.pending_start_hotkey_tokens = ()
-        state.pending_start_stop_hotkey_tokens = ()
-        state.pending_start_stop_requested = False
-        state.pending_start_requested_at = 0.0
+        _clear_pending_session_start_locked()
         state.is_listening = True
         state.is_transcribing = state.transcribing_session_count > 0
         state.is_live_finalizing = (
@@ -2177,18 +2178,100 @@ def start_listening(
         state.active_hotkey_kind = hotkey_kind
         state.active_hotkey_tokens = hotkey_tokens
         state.active_stop_hotkey_tokens = stop_hotkey_tokens
-        state.active_device_label = label_text
-        if (
+        state.active_device_label = device_label
+        uses_shift_override = (
             mode == MODE_DICTATION
             and "SHIFT" in hotkey_tokens
             and "SHIFT" not in state.dictation_hotkey_tokens
-        ):
-            state.active_audio_source = AUDIO_SOURCE_SYSTEM
-        else:
-            state.active_audio_source = AUDIO_SOURCE_MICROPHONE
+        )
+        state.active_audio_source = (
+            AUDIO_SOURCE_SYSTEM if uses_shift_override else AUDIO_SOURCE_MICROPHONE
+        )
         state.active_start_requested_at = start_requested_at
         state.active_stream_ready_at = 0.0
         state.active_first_audio_at = 0.0
+        return ActiveSession(session_id, state.active_audio_source, start_requested_at)
+
+
+def abort_session(session_id: int) -> None:
+    with state.lock:
+        if state.active_session_id == session_id:
+            _clear_active_session_locked()
+    update_tray_status("session aborted")
+
+
+def monitor_active_session(session_id: int) -> None:
+    while True:
+        time.sleep(0.02)
+        with state.lock:
+            should_stop = state.should_stop and state.active_session_id == session_id
+            monitor_enabled = state.monitor_enabled
+            last_audio_time = state.last_audio_time
+            muted_warning = state.muted_warning
+        if should_stop:
+            return
+        if not monitor_enabled:
+            continue
+        idle_s = time.monotonic() - last_audio_time
+        if idle_s >= MUTE_WARNING_AFTER_S and not muted_warning:
+            with state.lock:
+                state.muted_warning = True
+            log("[Audio] You may be muted or too quiet.")
+            update_tray_status("mute warning")
+        elif idle_s < MUTE_WARNING_AFTER_S and muted_warning:
+            with state.lock:
+                state.muted_warning = False
+            update_tray_status("audio resumed")
+
+
+def finish_capture_session(session_id: int) -> CaptureTimestamps:
+    with state.lock:
+        timestamps = CaptureTimestamps(
+            state.active_start_requested_at,
+            state.active_stream_ready_at,
+            state.active_first_audio_at,
+        )
+        if state.active_session_id == session_id:
+            _clear_active_session_locked()
+    update_tray_status("session ended")
+    return timestamps
+
+
+def start_listening(
+    mode: str,
+    hotkey_name: str,
+    hotkey_kind: str,
+    hotkey_tokens: tuple[str, ...],
+    device_index: int | None,
+    device_label: str,
+):
+    if not OPENAI_API_KEY:
+        log("ERROR: OPENAI_API_KEY not set.")
+        with state.lock:
+            _clear_pending_session_start_locked()
+        return
+    enforce_transcription_engine_dependencies()
+    paste_target = capture_paste_target() if mode == MODE_DICTATION else None
+    if paste_target is not None:
+        log(
+            "[Paste] Remembered target "
+            f"hwnd={paste_target.focus_hwnd} class={paste_target.focus_class_name!r}."
+        )
+
+    label_text = device_label or DEFAULT_DEVICE_LABEL
+    record_buffer: list[np.ndarray] = []
+    buffer_lock = threading.Lock()
+    active_session = activate_session(
+        mode,
+        hotkey_name,
+        hotkey_kind,
+        hotkey_tokens,
+        label_text,
+    )
+    if active_session is None:
+        return
+    session_id = active_session.session_id
+    audio_source = active_session.audio_source
     update_tray_status("session started")
 
     with state.lock:
@@ -2256,8 +2339,6 @@ def start_listening(
             except queue.Full:
                 return
 
-    with state.lock:
-        audio_source = state.active_audio_source
     recorder, recorder_retries = build_session_recorder(
         audio_source,
         device_index,
@@ -2279,22 +2360,7 @@ def start_listening(
         if realtime_worker is not None:
             realtime_worker.join(timeout=1.0)
         log(f"[Audio] {label} start aborted; no usable input device.")
-        with state.lock:
-            if state.active_session_id == session_id:
-                state.session_start_pending = False
-                state.is_listening = False
-                state.active_hotkey = ""
-                state.active_hotkey_kind = ""
-                state.active_hotkey_tokens = ()
-                state.active_stop_hotkey_tokens = ()
-                state.active_device_label = ""
-                state.active_audio_source = AUDIO_SOURCE_MICROPHONE
-                state.active_start_requested_at = 0.0
-                state.active_stream_ready_at = 0.0
-                state.active_first_audio_at = 0.0
-                state.should_stop = False
-                state.muted_warning = False
-        update_tray_status("session aborted")
+        abort_session(session_id)
         return
 
     label_text = active_label or DEFAULT_DEVICE_LABEL
@@ -2309,54 +2375,24 @@ def start_listening(
     maybe_beep(BEEP_START_PATTERN)
 
     try:
-        while True:
-            time.sleep(0.02)
-            with state.lock:
-                monitor_enabled = state.monitor_enabled
-                last_audio_time = state.last_audio_time
-                muted_warning = state.muted_warning
-            with state.lock:
-                should_stop = state.should_stop and state.active_session_id == session_id
-            if should_stop:
-                break
-            if monitor_enabled:
-                idle_s = time.monotonic() - last_audio_time
-                if idle_s >= MUTE_WARNING_AFTER_S and not muted_warning:
-                    with state.lock:
-                        state.muted_warning = True
-                    log("[Audio] You may be muted or too quiet.")
-                    update_tray_status("mute warning")
-                elif idle_s < MUTE_WARNING_AFTER_S and muted_warning:
-                    with state.lock:
-                        state.muted_warning = False
-                    update_tray_status("audio resumed")
+        monitor_active_session(session_id)
     finally:
         recorder.stop()
         maybe_beep(BEEP_STOP_PATTERN)
 
-    with state.lock:
-        start_requested_at = state.active_start_requested_at
-        stream_ready_at = state.active_stream_ready_at
-        first_audio_at = state.active_first_audio_at
-        if state.active_session_id == session_id:
-            state.session_start_pending = False
-            state.is_listening = False
-            state.active_hotkey = ""
-            state.active_hotkey_kind = ""
-            state.active_hotkey_tokens = ()
-            state.active_stop_hotkey_tokens = ()
-            state.active_device_label = ""
-            state.active_audio_source = AUDIO_SOURCE_MICROPHONE
-            state.active_start_requested_at = 0.0
-            state.active_stream_ready_at = 0.0
-            state.active_first_audio_at = 0.0
-            state.should_stop = False
-            state.muted_warning = False
-    update_tray_status("session ended")
+    capture_timestamps = finish_capture_session(session_id)
 
-    stream_ready_ms = max(0.0, (stream_ready_at - start_requested_at) * 1000.0)
+    stream_ready_ms = max(
+        0.0,
+        (capture_timestamps.stream_ready_at - capture_timestamps.start_requested_at) * 1000.0,
+    )
     first_audio_ms = (
-        max(0.0, (first_audio_at - start_requested_at) * 1000.0) if first_audio_at > 0 else 0.0
+        max(
+            0.0,
+            (capture_timestamps.first_audio_at - capture_timestamps.start_requested_at) * 1000.0,
+        )
+        if capture_timestamps.first_audio_at > 0
+        else 0.0
     )
     pre_roll_samples = int(getattr(recorder, "pre_roll_samples", 0) or 0)
     pre_roll_ms = pre_roll_samples * 1000.0 / SAMPLE_RATE
