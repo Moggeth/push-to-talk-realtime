@@ -25,6 +25,7 @@ import threading
 import time
 import traceback
 import webbrowser
+from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -184,6 +185,13 @@ CHANNELS = 1
 BLOCK_DUR_S = 0.04  # 40 ms per audio chunk
 BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_DUR_S)
 DEVICE_INDEX = None  # set to an index from sd.query_devices() if needed
+MICROPHONE_PRE_ROLL_MS = max(0, int(os.getenv("MICROPHONE_PRE_ROLL_MS", "400")))
+MICROPHONE_PRE_ROLL_ENABLED = os.getenv("MICROPHONE_PRE_ROLL_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 
 # Behavior
 MODE_DICTATION = "dictation"
@@ -318,6 +326,7 @@ TRAY_COLOR_POST_PROCESSING = (186, 85, 211, 255)
 TRAY_ACTIVITY_READY = "ready"
 TRAY_ACTIVITY_LISTENING = "listening"
 TRAY_ACTIVITY_TRANSCRIBING = "transcribing"
+TRAY_ACTIVITY_FINALIZING = "finalizing"
 TRAY_ACTIVITY_POST_PROCESSING = "post_processing"
 TRAY_SPINNER_STEPS = 16
 TRAY_SPINNER_SWEEP_DEG = 64
@@ -359,6 +368,8 @@ class SessionState:
     is_listening: bool = False
     is_transcribing: bool = False
     transcribing_session_count: int = 0
+    live_finalizing_session_count: int = 0
+    is_live_finalizing: bool = False
     is_post_processing: bool = False
     post_processing_session_count: int = 0
     session_start_pending: bool = False
@@ -366,6 +377,7 @@ class SessionState:
     pending_start_hotkey_tokens: tuple[str, ...] = ()
     pending_start_stop_hotkey_tokens: tuple[str, ...] = ()
     pending_start_stop_requested: bool = False
+    pending_start_requested_at: float = 0.0
     should_stop: bool = False
     transcript_final: str = ""
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -377,6 +389,9 @@ class SessionState:
     active_stop_hotkey_tokens: tuple[str, ...] = ()
     active_device_label: str = ""
     active_audio_source: str = AUDIO_SOURCE_MICROPHONE
+    active_start_requested_at: float = 0.0
+    active_stream_ready_at: float = 0.0
+    active_first_audio_at: float = 0.0
     dictation_hotkey_kind: str = HOTKEY_KIND_KEYBOARD
     dictation_hotkey_label: str = HOTKEY_DICTATION
     dictation_hotkey_tokens: tuple[str, ...] = (HOTKEY_DICTATION,)
@@ -559,6 +574,8 @@ def current_tray_status_signature() -> tuple[str, str, str, str, str, bool, bool
             status = "Listening"
         elif state.is_post_processing:
             status = "Post-processing"
+        elif state.is_live_finalizing:
+            status = "Finalizing"
         elif state.is_transcribing:
             status = "Transcribing"
         mode = "Dictation" if state.mode == MODE_DICTATION else "Worklog"
@@ -1062,19 +1079,30 @@ def maybe_beep(pattern: list[tuple[int, int]]) -> None:
         log("[Beep error]", exc)
 
 
-def mark_transcription_started() -> None:
+def mark_transcription_started(*, live_finalizing: bool = False) -> None:
     with state.lock:
         state.transcribing_session_count += 1
+        if live_finalizing:
+            state.live_finalizing_session_count += 1
         state.is_transcribing = state.transcribing_session_count > 0
+        state.is_live_finalizing = (
+            state.live_finalizing_session_count == state.transcribing_session_count
+        )
     update_tray_status("transcription started")
 
 
-def mark_transcription_finished(final_text: str = "") -> None:
+def mark_transcription_finished(final_text: str = "", *, live_finalizing: bool = False) -> None:
     with state.lock:
         if final_text:
             state.transcript_final = final_text
         state.transcribing_session_count = max(0, state.transcribing_session_count - 1)
+        if live_finalizing:
+            state.live_finalizing_session_count = max(0, state.live_finalizing_session_count - 1)
         state.is_transcribing = state.transcribing_session_count > 0
+        state.is_live_finalizing = (
+            state.is_transcribing
+            and state.live_finalizing_session_count == state.transcribing_session_count
+        )
     update_tray_status("transcription finished")
 
 
@@ -1523,7 +1551,10 @@ def set_input_device(idx: int | None, label: str) -> None:
         state.worklog_device_label = label
         if state.is_listening:
             state.active_device_label = label
+        is_listening = state.is_listening
     log_device_selection("Input", idx, label)
+    if MICROPHONE_PRE_ROLL_ENABLED and not is_listening:
+        warm_microphone_capture.start(idx)
     refresh_tray_menu()
 
 
@@ -1572,24 +1603,32 @@ class AudioRecorder:
             self.stream = None
 
 
-def append_float_audio_block(
-    indata,
+def float_audio_block_to_pcm(indata) -> tuple[np.ndarray, float]:
+    samples = np.asarray(indata)
+    if samples.size == 0:
+        return np.array([], dtype=np.int16), 0.0
+    mono = samples if samples.ndim == 1 else samples[:, 0]
+    pcm = np.clip(mono.astype(np.float32, copy=False), -1.0, 1.0)
+    rms = float(np.sqrt(np.mean(pcm * pcm))) if pcm.size else 0.0
+    return (pcm * 32767.0).astype(np.int16), rms
+
+
+def append_pcm_audio_block(
+    pcm_i16: np.ndarray,
+    rms: float,
     buffer: list,
     buffer_lock: threading.Lock,
     on_chunk: Callable[[np.ndarray], None] | None = None,
 ) -> None:
-    samples = np.asarray(indata)
-    if samples.size == 0:
+    if pcm_i16.size == 0:
         return
-    mono = samples if samples.ndim == 1 else samples[:, 0]
-    pcm = np.clip(mono.astype(np.float32, copy=False), -1.0, 1.0)
-    rms = float(np.sqrt(np.mean(pcm * pcm))) if pcm.size else 0.0
     now = time.monotonic()
     with state.lock:
         state.last_audio_rms = rms
         if rms >= MUTE_RMS_THRESHOLD:
             state.last_audio_time = now
-    pcm_i16 = (pcm * 32767.0).astype(np.int16)
+        if state.is_listening and state.active_first_audio_at <= 0:
+            state.active_first_audio_at = now
     with buffer_lock:
         buffer.append(pcm_i16.copy())
     if on_chunk is not None:
@@ -1597,6 +1636,166 @@ def append_float_audio_block(
             on_chunk(pcm_i16.copy())
         except Exception:  # pylint: disable=broad-except
             return
+
+
+def append_float_audio_block(
+    indata,
+    buffer: list,
+    buffer_lock: threading.Lock,
+    on_chunk: Callable[[np.ndarray], None] | None = None,
+) -> None:
+    pcm_i16, rms = float_audio_block_to_pcm(indata)
+    append_pcm_audio_block(pcm_i16, rms, buffer, buffer_lock, on_chunk)
+
+
+class WarmMicrophoneCapture:
+    def __init__(self, pre_roll_ms: int) -> None:
+        block_count = max(1, int(np.ceil(pre_roll_ms / (BLOCK_DUR_S * 1000.0))))
+        self.pre_roll: deque[np.ndarray] = deque(maxlen=block_count)
+        self.lock = threading.RLock()
+        self.stream_lock = threading.Lock()
+        self.stream: Any = None
+        self.device_index: int | None = None
+        self.active_token: object | None = None
+        self.active_buffer: list | None = None
+        self.active_buffer_lock: threading.Lock | None = None
+        self.active_on_chunk: Callable[[np.ndarray], None] | None = None
+
+    def _callback(self, indata, frames, time_info, status) -> None:
+        del frames, time_info
+        if status:
+            return
+        pcm_i16, rms = float_audio_block_to_pcm(indata)
+        if not pcm_i16.size:
+            return
+        with self.lock:
+            if self.active_token is None:
+                self.pre_roll.append(pcm_i16.copy())
+                return
+            buffer = self.active_buffer
+            buffer_lock = self.active_buffer_lock
+            on_chunk = self.active_on_chunk
+            if buffer is not None and buffer_lock is not None:
+                append_pcm_audio_block(pcm_i16, rms, buffer, buffer_lock, on_chunk)
+
+    def is_ready_for(self, device_index: int | None) -> bool:
+        with self.lock:
+            return self.stream is not None and self.device_index == device_index
+
+    def start(self, device_index: int | None) -> bool:
+        with self.stream_lock:
+            if self.is_ready_for(device_index):
+                return True
+            self._stop_stream()
+            try:
+                stream = sd.InputStream(
+                    samplerate=SAMPLE_RATE,
+                    channels=CHANNELS,
+                    dtype="float32",
+                    blocksize=BLOCK_SIZE,
+                    device=device_index,
+                    callback=self._callback,
+                )
+                stream.start()
+            except Exception as exc:  # pylint: disable=broad-except
+                log("[Audio] Microphone pre-roll unavailable; using normal startup:", exc)
+                return False
+            with self.lock:
+                self.stream = stream
+                self.device_index = device_index
+                self.pre_roll.clear()
+            log(
+                f"[Audio] Microphone pre-roll ready ({MICROPHONE_PRE_ROLL_MS} ms, "
+                f"device={device_index if device_index is not None else 'default'})."
+            )
+            return True
+
+    def _stop_stream(self) -> None:
+        with self.lock:
+            stream = self.stream
+            self.stream = None
+            self.device_index = None
+            self.active_token = None
+            self.active_buffer = None
+            self.active_buffer_lock = None
+            self.active_on_chunk = None
+            self.pre_roll.clear()
+        if stream is not None:
+            with suppress(Exception):
+                stream.stop()
+            with suppress(Exception):
+                stream.close()
+
+    def stop(self) -> None:
+        with self.stream_lock:
+            self._stop_stream()
+
+    def attach(
+        self,
+        device_index: int | None,
+        buffer: list,
+        buffer_lock: threading.Lock,
+        on_chunk: Callable[[np.ndarray], None] | None,
+    ) -> tuple[object, int]:
+        if not self.is_ready_for(device_index):
+            raise RuntimeError("warm microphone stream is not ready")
+        token = object()
+        with self.lock:
+            if self.active_token is not None:
+                raise RuntimeError("warm microphone stream is already in use")
+            pre_roll_chunks = [chunk.copy() for chunk in self.pre_roll]
+            self.pre_roll.clear()
+            self.active_token = token
+            self.active_buffer = buffer
+            self.active_buffer_lock = buffer_lock
+            self.active_on_chunk = on_chunk
+            with buffer_lock:
+                buffer.extend(pre_roll_chunks)
+            if on_chunk is not None:
+                for chunk in pre_roll_chunks:
+                    on_chunk(chunk.copy())
+        return token, sum(len(chunk) for chunk in pre_roll_chunks)
+
+    def detach(self, token: object | None) -> None:
+        with self.lock:
+            if token is None or token is not self.active_token:
+                return
+            self.active_token = None
+            self.active_buffer = None
+            self.active_buffer_lock = None
+            self.active_on_chunk = None
+            self.pre_roll.clear()
+
+
+class WarmMicrophoneRecorder:
+    def __init__(
+        self,
+        device_index: int | None,
+        buffer: list,
+        buffer_lock: threading.Lock,
+        on_chunk: Callable[[np.ndarray], None] | None = None,
+    ) -> None:
+        self.device_index = device_index
+        self.buffer = buffer
+        self.buffer_lock = buffer_lock
+        self.on_chunk = on_chunk
+        self.token: object | None = None
+        self.pre_roll_samples = 0
+
+    def start(self) -> None:
+        self.token, self.pre_roll_samples = warm_microphone_capture.attach(
+            self.device_index,
+            self.buffer,
+            self.buffer_lock,
+            self.on_chunk,
+        )
+
+    def stop(self) -> None:
+        warm_microphone_capture.detach(self.token)
+        self.token = None
+
+
+warm_microphone_capture = WarmMicrophoneCapture(MICROPHONE_PRE_ROLL_MS)
 
 
 class SystemAudioLoopbackRecorder:
@@ -1659,7 +1858,7 @@ class SystemAudioLoopbackRecorder:
 
 
 def start_recorder_with_fallback(
-    recorder: AudioRecorder | SystemAudioLoopbackRecorder,
+    recorder: AudioRecorder | WarmMicrophoneRecorder | SystemAudioLoopbackRecorder,
     role: str,
     device_label: str,
     retries: int = 2,
@@ -1680,7 +1879,7 @@ def start_recorder_with_fallback(
                 time.sleep(0.25)
                 refresh_device_list()
 
-    if isinstance(recorder, SystemAudioLoopbackRecorder):
+    if isinstance(recorder, (SystemAudioLoopbackRecorder, WarmMicrophoneRecorder)):
         return False, recorder.device_index, label_text
 
     fallback_index, fallback_label = pick_fallback_input_device(recorder.device_index)
@@ -1713,11 +1912,25 @@ def build_session_recorder(
     buffer: list,
     buffer_lock: threading.Lock,
     on_chunk: Callable[[np.ndarray], None] | None = None,
-) -> tuple[AudioRecorder | SystemAudioLoopbackRecorder, int]:
+) -> tuple[AudioRecorder | WarmMicrophoneRecorder | SystemAudioLoopbackRecorder, int]:
     if audio_source == AUDIO_SOURCE_SYSTEM and is_system_audio_loopback_label(device_label):
         return (
             SystemAudioLoopbackRecorder(
                 output_descriptor=SYSTEM_AUDIO_DEVICE,
+                buffer=buffer,
+                buffer_lock=buffer_lock,
+                on_chunk=on_chunk,
+            ),
+            0,
+        )
+    if (
+        audio_source == AUDIO_SOURCE_MICROPHONE
+        and MICROPHONE_PRE_ROLL_ENABLED
+        and warm_microphone_capture.is_ready_for(device_index)
+    ):
+        return (
+            WarmMicrophoneRecorder(
+                device_index=device_index,
                 buffer=buffer,
                 buffer_lock=buffer_lock,
                 on_chunk=on_chunk,
@@ -1971,6 +2184,7 @@ def begin_session_start(
     device_label: str,
 ) -> bool:
     stop_hotkey_tokens = session_stop_hotkey_tokens(mode, hotkey_tokens)
+    requested_at = time.monotonic()
     with state.lock:
         if state.is_listening or state.session_start_pending:
             return False
@@ -1979,6 +2193,7 @@ def begin_session_start(
         state.pending_start_hotkey_tokens = hotkey_tokens
         state.pending_start_stop_hotkey_tokens = stop_hotkey_tokens
         state.pending_start_stop_requested = False
+        state.pending_start_requested_at = requested_at
     try:
         threading.Thread(
             target=start_listening,
@@ -1992,6 +2207,7 @@ def begin_session_start(
             state.pending_start_hotkey_tokens = ()
             state.pending_start_stop_hotkey_tokens = ()
             state.pending_start_stop_requested = False
+            state.pending_start_requested_at = 0.0
         raise
     return True
 
@@ -2012,6 +2228,7 @@ def start_listening(
             state.pending_start_hotkey_tokens = ()
             state.pending_start_stop_hotkey_tokens = ()
             state.pending_start_stop_requested = False
+            state.pending_start_requested_at = 0.0
         return
     enforce_transcription_engine_dependencies()
     paste_target = capture_paste_target() if mode == MODE_DICTATION else None
@@ -2032,6 +2249,7 @@ def start_listening(
             state.pending_start_hotkey_tokens = ()
             state.pending_start_stop_hotkey_tokens = ()
             state.pending_start_stop_requested = False
+            state.pending_start_requested_at = 0.0
             return
         stop_hotkey_tokens = session_stop_hotkey_tokens(
             mode,
@@ -2043,6 +2261,7 @@ def start_listening(
             and state.pending_start_hotkey_tokens == hotkey_tokens
             and state.pending_start_stop_requested
         )
+        start_requested_at = state.pending_start_requested_at or time.monotonic()
         state.session_counter += 1
         session_id = state.session_counter
         state.active_session_id = session_id
@@ -2051,8 +2270,13 @@ def start_listening(
         state.pending_start_hotkey_tokens = ()
         state.pending_start_stop_hotkey_tokens = ()
         state.pending_start_stop_requested = False
+        state.pending_start_requested_at = 0.0
         state.is_listening = True
-        state.is_transcribing = False
+        state.is_transcribing = state.transcribing_session_count > 0
+        state.is_live_finalizing = (
+            state.is_transcribing
+            and state.live_finalizing_session_count == state.transcribing_session_count
+        )
         state.should_stop = stop_requested_during_start
         state.transcript_final = ""
         state.muted_warning = False
@@ -2072,6 +2296,9 @@ def start_listening(
             state.active_audio_source = AUDIO_SOURCE_SYSTEM
         else:
             state.active_audio_source = AUDIO_SOURCE_MICROPHONE
+        state.active_start_requested_at = start_requested_at
+        state.active_stream_ready_at = 0.0
+        state.active_first_audio_at = 0.0
     update_tray_status("session started")
 
     with state.lock:
@@ -2155,6 +2382,7 @@ def start_listening(
         label_text,
         retries=recorder_retries,
     )
+    stream_ready_at = time.monotonic()
     if not started:
         if realtime_stop_event is not None:
             realtime_stop_event.set()
@@ -2171,6 +2399,9 @@ def start_listening(
                 state.active_stop_hotkey_tokens = ()
                 state.active_device_label = ""
                 state.active_audio_source = AUDIO_SOURCE_MICROPHONE
+                state.active_start_requested_at = 0.0
+                state.active_stream_ready_at = 0.0
+                state.active_first_audio_at = 0.0
                 state.should_stop = False
                 state.muted_warning = False
         update_tray_status("session aborted")
@@ -2180,6 +2411,7 @@ def start_listening(
     with state.lock:
         if state.active_session_id == session_id:
             state.active_device_label = label_text
+            state.active_stream_ready_at = stream_ready_at
     update_tray_status("session ready")
     if realtime_worker is not None and not realtime_worker.is_alive():
         realtime_worker.start()
@@ -2213,6 +2445,9 @@ def start_listening(
         maybe_beep(BEEP_STOP_PATTERN)
 
     with state.lock:
+        start_requested_at = state.active_start_requested_at
+        stream_ready_at = state.active_stream_ready_at
+        first_audio_at = state.active_first_audio_at
         if state.active_session_id == session_id:
             state.session_start_pending = False
             state.is_listening = False
@@ -2222,14 +2457,33 @@ def start_listening(
             state.active_stop_hotkey_tokens = ()
             state.active_device_label = ""
             state.active_audio_source = AUDIO_SOURCE_MICROPHONE
+            state.active_start_requested_at = 0.0
+            state.active_stream_ready_at = 0.0
+            state.active_first_audio_at = 0.0
             state.should_stop = False
             state.muted_warning = False
     update_tray_status("session ended")
 
+    stream_ready_ms = max(0.0, (stream_ready_at - start_requested_at) * 1000.0)
+    first_audio_ms = (
+        max(0.0, (first_audio_at - start_requested_at) * 1000.0) if first_audio_at > 0 else 0.0
+    )
+    pre_roll_samples = int(getattr(recorder, "pre_roll_samples", 0) or 0)
+    pre_roll_ms = pre_roll_samples * 1000.0 / SAMPLE_RATE
+    log(
+        f"[Capture metrics] stream-ready={stream_ready_ms:.0f} ms | "
+        f"first-audio={first_audio_ms:.0f} ms | pre-roll={pre_roll_ms:.0f} ms"
+    )
+    if MICROPHONE_PRE_ROLL_ENABLED:
+        with state.lock:
+            selected_microphone_index = state.dictation_device_index
+        if not warm_microphone_capture.is_ready_for(selected_microphone_index):
+            warm_microphone_capture.start(selected_microphone_index)
+
     with buffer_lock:
         chunks = [chunk.copy() for chunk in record_buffer]
 
-    mark_transcription_started()
+    mark_transcription_started(live_finalizing=use_realtime_streaming)
     log(
         "\n[Transcribing] "
         f"{transcription_engine_label(transcription_engine, recorded_transcription_model)} "
@@ -2402,7 +2656,7 @@ def start_listening(
             log("\n(No speech captured.)")
     finally:
         advance_output_turn()
-        mark_transcription_finished(final_text)
+        mark_transcription_finished(final_text, live_finalizing=use_realtime_streaming)
 
 
 # -------------------- Hotkey handling --------------------
@@ -2706,6 +2960,7 @@ def tray_visual_target() -> tuple[tuple[int, int, int, int], str, int | None]:
     with state.lock:
         is_listening = state.is_listening
         is_transcribing = state.is_transcribing
+        is_live_finalizing = state.is_live_finalizing
         is_post_processing = state.is_post_processing
         spinner_step = state.tray_spinner_step
         audio_source = state.active_audio_source
@@ -2719,6 +2974,8 @@ def tray_visual_target() -> tuple[tuple[int, int, int, int], str, int | None]:
     if is_post_processing:
         return TRAY_COLOR_POST_PROCESSING, TRAY_ACTIVITY_POST_PROCESSING, spinner_step
     if is_transcribing:
+        if is_live_finalizing:
+            return TRAY_COLOR_TRANSCRIBING, TRAY_ACTIVITY_FINALIZING, None
         return TRAY_COLOR_TRANSCRIBING, TRAY_ACTIVITY_TRANSCRIBING, spinner_step
     return TRAY_COLOR_READY, TRAY_ACTIVITY_READY, None
 
@@ -2780,6 +3037,7 @@ def update_tray_tooltip() -> None:
         tooltip_enabled = state.tooltip_enabled
         is_listening = state.is_listening
         is_transcribing = state.is_transcribing
+        is_live_finalizing = state.is_live_finalizing
         is_post_processing = state.is_post_processing
         mode = state.mode
         device_label = state.active_device_label
@@ -2797,6 +3055,8 @@ def update_tray_tooltip() -> None:
         status = "Listening"
     elif is_post_processing:
         status = "Post-processing"
+    elif is_live_finalizing:
+        status = "Finalizing"
     elif is_transcribing:
         status = "Transcribing"
 
@@ -3596,8 +3856,11 @@ def tray_animation_loop() -> None:
         with state.lock:
             is_listening = state.is_listening
             is_transcribing = state.is_transcribing
+            is_live_finalizing = state.is_live_finalizing
             is_post_processing = state.is_post_processing
-        if (is_transcribing or is_post_processing) and not is_listening:
+        if (
+            (is_transcribing and not is_live_finalizing) or is_post_processing
+        ) and not is_listening:
             with state.lock:
                 state.tray_spinner_step = (state.tray_spinner_step + 1) % TRAY_SPINNER_STEPS
             with tray_ui_lock:
@@ -3627,6 +3890,10 @@ def start_tray_animation_loop() -> None:
 def tray_setup(_icon: TrayIconLike) -> None:
     global tray_status_signature
     _icon.visible = True  # required when using a custom setup callback
+    if MICROPHONE_PRE_ROLL_ENABLED:
+        with state.lock:
+            microphone_device_index = state.dictation_device_index
+        warm_microphone_capture.start(microphone_device_index)
     reset_tray_visual_state()
     tray_status_signature = None
     enforce_transcription_engine_dependencies()
@@ -3653,6 +3920,7 @@ def tray_setup(_icon: TrayIconLike) -> None:
 def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
     global tray_status_signature
     shutdown_event.set()
+    warm_microphone_capture.stop()
     stop_input_listeners()
     stop_transcript_browser()
     reset_tray_visual_state()
@@ -3683,6 +3951,7 @@ def main() -> None:
         log("\nExiting...")
         tray_exit(tray_icon)
     finally:
+        warm_microphone_capture.stop()
         stop_input_listeners()
         stop_transcript_browser()
         shutdown_event.set()

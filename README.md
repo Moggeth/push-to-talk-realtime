@@ -24,10 +24,11 @@ Features
 - Transcription preferences are saved and restored on next launch.
 - GPT post-processing is off by default and falls back to the original transcript if the additional API call fails or returns no text.
 - Tray controls expose common toggles and active selections directly, alongside transcript browsing, restart, and quit actions.
-- Busy tray feedback: non-AppIndicator backends update the tray icon live; recording from the microphone is red, system-audio recording is blue, transcription is orange with an animated waveform, and GPT post-processing is magenta with an animated sparkle. State changes switch immediately into a destination-dominant color and settle over two short frames. Ubuntu AppIndicator stays on a static icon for stability and writes status changes to the app log.
+- Busy tray feedback: non-AppIndicator backends update the tray icon live; microphone recording is red, system-audio recording is blue, recorded transcription is orange with an animated waveform, GPT Live Transcribe uses a static orange finalizing state after release, and GPT post-processing is magenta with an animated sparkle. State changes switch immediately into a destination-dominant color and settle over two short frames. Ubuntu AppIndicator stays on a static icon for stability and writes status changes to the app log.
 - Single-instance guard: accidental duplicate launches exit before installing a second global hotkey listener.
 - Startup hardening: the ready message is logged only after the global hotkey listener starts, and a watchdog restarts the listener if it stops unexpectedly.
 - First-press reliability: if the dictation key is released while the audio session is still starting, the release is remembered and applied as soon as recording becomes active.
+- Instant-start microphone capture: the selected microphone stays warm with a bounded 400 ms local pre-roll buffer, so speech begun immediately with the trigger is retained. Each capture logs hotkey-to-stream-ready and hotkey-to-first-audio timings.
 - Tray menu controls:
   - Select one shared input device for both dictation and work-log capture.
   - Toggle beeps, status tooltip, tap-to-toggle mode, and mute monitor.
@@ -202,6 +203,8 @@ Environment variables:
 - `STEREO_MIX_SEARCH` (optional): name fragment for Stereo Mix device search.
 - `MUTE_RMS_THRESHOLD` (optional): RMS threshold for mute monitor, default `0.01`.
 - `MUTE_WARNING_AFTER_S` (optional): seconds before mute warning, default `1.5`.
+- `MICROPHONE_PRE_ROLL_ENABLED` (optional): `1` (default) keeps the selected microphone stream warm; set to `0` to use open-on-press capture.
+- `MICROPHONE_PRE_ROLL_MS` (optional): local audio retained immediately before the trigger, default `400` ms.
 
 Device selection
 ----------------
@@ -246,6 +249,7 @@ Notes and tips
 - A post-processing error is logged and the untouched transcript continues through the normal punctuation, history, work-log, and paste paths.
 - Paste suffix options affect dictation paste only.
 - Tray icon color: green when idle, red for microphone recording, blue for system-audio recording, orange while transcribing, and magenta while GPT post-processing. Non-AppIndicator backends use a crisp comet ring plus an animated waveform for transcription and sparkle for GPT work; color changes settle over two target-dominant frames without delaying the state change.
+- The warm microphone pre-roll remains local and is discarded continuously while idle. Only the bounded audio immediately preceding an actual trigger is included in that recording. If the warm stream cannot open, the app logs the failure and retains the previous open-on-press fallback.
 - While an earlier transcript is still processing, you can start a new recording; completed dictations are pasted in the order the recordings started.
 - Realtime live typing applies only to dictation mode and may need app focus to stay in the target field.
 - GPT Live Transcribe has no fallback model or local chunking path. A failed live session is logged instead of silently changing transcription engines.

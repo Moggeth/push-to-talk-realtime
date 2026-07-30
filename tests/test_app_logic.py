@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
 
+import numpy as np
 import pytest
 
 import history_store
@@ -46,6 +47,7 @@ class FakeThread:
 
 @pytest.fixture(autouse=True)
 def reset_app_state(monkeypatch, tmp_path: Path):
+    app.warm_microphone_capture.stop()
     app.state = app.SessionState()
     app.tray_icon = None
     app.reset_tray_visual_state()
@@ -62,6 +64,8 @@ def reset_app_state(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(app, "LOG_PATH", tmp_path / "push_to_talk_realtime.log")
     monkeypatch.setattr(app, "transcript_store", TranscriptStore(tmp_path / "transcripts.db"))
     FakeThread.created.clear()
+    yield
+    app.warm_microphone_capture.stop()
 
 
 def make_key(name: str) -> SimpleNamespace:
@@ -422,6 +426,23 @@ def test_post_processing_state_is_reference_counted(monkeypatch):
         "post-processing finished",
         "post-processing finished",
     ]
+
+
+def test_live_finalizing_state_only_applies_when_all_active_work_is_live(monkeypatch):
+    monkeypatch.setattr(app, "update_tray_status", lambda _reason: None)
+
+    app.mark_transcription_started(live_finalizing=True)
+    assert app.state.is_live_finalizing is True
+
+    app.mark_transcription_started(live_finalizing=False)
+    assert app.state.is_live_finalizing is False
+
+    app.mark_transcription_finished(live_finalizing=False)
+    assert app.state.is_live_finalizing is True
+
+    app.mark_transcription_finished(live_finalizing=True)
+    assert app.state.is_transcribing is False
+    assert app.state.is_live_finalizing is False
 
 
 def test_append_work_log_entry_writes_timestamped_single_line(monkeypatch, tmp_path: Path):
@@ -1022,6 +1043,67 @@ def test_build_session_recorder_keeps_microphone_path_for_normal_audio():
     assert retries == 2
 
 
+def test_warm_microphone_capture_prepends_bounded_pre_roll(monkeypatch):
+    streams = []
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            self.started = False
+            self.stopped = False
+            self.closed = False
+            streams.append(self)
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            self.stopped = True
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(app.sd, "InputStream", FakeStream)
+    capture = app.WarmMicrophoneCapture(pre_roll_ms=80)
+    assert capture.start(3) is True
+
+    for value in (0.1, 0.2, 0.3):
+        capture._callback(
+            np.full((app.BLOCK_SIZE, 1), value, dtype=np.float32),
+            app.BLOCK_SIZE,
+            None,
+            None,
+        )
+
+    buffer = []
+    buffer_lock = threading.Lock()
+    token, samples = capture.attach(3, buffer, buffer_lock, None)
+
+    assert samples == app.BLOCK_SIZE * 2
+    assert len(buffer) == 2
+    assert int(buffer[0][0]) == int(0.2 * 32767)
+    assert int(buffer[1][0]) == int(0.3 * 32767)
+
+    with app.state.lock:
+        app.state.is_listening = True
+        app.state.active_first_audio_at = 0.0
+    capture._callback(
+        np.full((app.BLOCK_SIZE, 1), 0.4, dtype=np.float32),
+        app.BLOCK_SIZE,
+        None,
+        None,
+    )
+
+    assert len(buffer) == 3
+    with app.state.lock:
+        assert app.state.active_first_audio_at > 0
+
+    capture.detach(token)
+    capture.stop()
+    assert streams[0].started is True
+    assert streams[0].stopped is True
+    assert streams[0].closed is True
+
+
 def test_set_input_device_updates_both_modes_and_refreshes_menu(monkeypatch):
     refresh_calls = []
     monkeypatch.setattr(app, "refresh_tray_menu", lambda: refresh_calls.append("refresh"))
@@ -1160,6 +1242,19 @@ def test_update_tray_icon_uses_animated_post_processing_color(monkeypatch):
 
     assert renders == [(app.TRAY_COLOR_POST_PROCESSING, 4)]
     assert app.tray_icon.icon == "icon"
+
+
+def test_live_finalizing_uses_static_orange_icon():
+    with app.state.lock:
+        app.state.is_transcribing = True
+        app.state.is_live_finalizing = True
+        app.state.tray_spinner_step = 7
+
+    assert app.tray_visual_target() == (
+        app.TRAY_COLOR_TRANSCRIBING,
+        app.TRAY_ACTIVITY_FINALIZING,
+        None,
+    )
 
 
 def test_update_tray_icon_uses_target_dominant_two_frame_color_transition(monkeypatch):
@@ -1880,6 +1975,7 @@ def test_tray_setup_marks_icon_visible_and_starts_listener(monkeypatch):
     )
     monkeypatch.setattr(app, "enforce_transcription_engine_dependencies", lambda: None)
     monkeypatch.setattr(app, "start_transcription_warmup", lambda: None)
+    monkeypatch.setattr(app.warm_microphone_capture, "start", lambda _device: True)
 
     app.tray_setup(icon)
 
