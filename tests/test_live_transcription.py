@@ -105,6 +105,22 @@ def test_live_session_surfaces_structured_api_errors():
         raise AssertionError("Expected the realtime API error to be raised")
 
 
+def test_live_session_honors_explicit_cancellation():
+    cancel_event = threading.Event()
+    cancel_event.set()
+    ws = FakeWebSocket([])
+
+    text = app.run_live_transcription_session(
+        ws,
+        queue.Queue(),
+        threading.Event(),
+        cancel_event=cancel_event,
+    )
+
+    assert text == ""
+    assert [event["type"] for event in ws.sent] == ["session.update"]
+
+
 def test_recorded_transcription_sends_gpt_transcribe_model(monkeypatch):
     calls: list[dict] = []
 

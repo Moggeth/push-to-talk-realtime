@@ -231,6 +231,8 @@ WARM_MICROPHONE_STALE_AFTER_S = max(
     float(os.getenv("WARM_MICROPHONE_STALE_AFTER_S", "2.0")),
 )
 WARM_MICROPHONE_HEALTH_CHECK_INTERVAL_S = 1.0
+WARM_MICROPHONE_RETRY_MAX_S = 30.0
+REALTIME_AUDIO_QUEUE_MAX_CHUNKS = max(32, int(os.getenv("REALTIME_AUDIO_QUEUE_MAX_CHUNKS", "512")))
 
 # Behavior
 MODE_DICTATION = "dictation"
@@ -473,6 +475,8 @@ input_listener_watchdog_stop = threading.Event()
 INPUT_LISTENER_BOOT_REBIND_DELAYS_S = (8.0, 30.0, 90.0)
 tray_icon: TrayIconLike | None = None
 tray_animation_thread: threading.Thread | None = None
+warm_microphone_watchdog_thread: threading.Thread | None = None
+warm_microphone_watchdog_stop = threading.Event()
 tray_icon_key: tuple[tuple[int, int, int, int], int | None, str] | None = None
 tray_target_color: tuple[int, int, int, int] | None = None
 tray_display_color: tuple[int, int, int, int] | None = None
@@ -2105,6 +2109,7 @@ def run_live_transcription_session(
     audio_queue: "queue.Queue[np.ndarray]",
     stop_event: threading.Event,
     on_delta: Callable[[str], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> str:
     return run_live_session_core(
         ws,
@@ -2112,6 +2117,7 @@ def run_live_transcription_session(
         stop_event,
         live_transcription_config(),
         on_delta,
+        cancel_event,
     )
 
 
@@ -2119,6 +2125,7 @@ def transcribe_with_gpt_live_stream(
     audio_queue: "queue.Queue[np.ndarray]",
     stop_event: threading.Event,
     on_delta: Callable[[str], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> str:
     dep_error = realtime_dependency_error()
     if dep_error:
@@ -2131,6 +2138,7 @@ def transcribe_with_gpt_live_stream(
             stop_event,
             live_transcription_config(),
             on_delta,
+            cancel_event,
         )
     except Exception as exc:  # pylint: disable=broad-except
         log("[GPT Live Transcribe error]", exc)
@@ -2352,6 +2360,43 @@ class TranscriptionOutcome:
     error: Exception | None = None
 
 
+class RealtimeAudioBuffer:
+    def __init__(self, max_chunks: int = REALTIME_AUDIO_QUEUE_MAX_CHUNKS) -> None:
+        self.queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=max_chunks)
+        self.dropped_chunks = 0
+        self.lock = threading.Lock()
+
+    def put(self, chunk: np.ndarray) -> bool:
+        try:
+            self.queue.put_nowait(chunk)
+            return True
+        except queue.Full:
+            with self.lock:
+                self.dropped_chunks += 1
+            return False
+
+    def drop_count(self) -> int:
+        with self.lock:
+            return self.dropped_chunks
+
+
+def cancel_realtime_worker(
+    worker: threading.Thread | None,
+    stop_event: threading.Event | None,
+    cancel_event: threading.Event | None,
+    *,
+    join_timeout_s: float = 2.0,
+) -> bool:
+    if stop_event is not None:
+        stop_event.set()
+    if cancel_event is not None:
+        cancel_event.set()
+    if worker is None or getattr(worker, "ident", None) is None:
+        return True
+    worker.join(timeout=join_timeout_s)
+    return not worker.is_alive()
+
+
 def finalize_session_transcription(
     *,
     chunks: list[np.ndarray],
@@ -2364,6 +2409,7 @@ def finalize_session_transcription(
     post_process_instruction_profile: str,
     realtime_worker: threading.Thread | None,
     realtime_stop_event: threading.Event | None,
+    realtime_cancel_event: threading.Event | None,
     realtime_result: dict[str, str],
 ) -> TranscriptionOutcome:
     use_realtime = transcription_engine == TRANSCRIPTION_ENGINE_LIVE
@@ -2381,12 +2427,18 @@ def finalize_session_transcription(
     try:
         if use_realtime and realtime_worker is not None and realtime_stop_event is not None:
             realtime_stop_event.set()
-            join_timeout_s = max(6.0, min(20.0, audio_duration_s + 4.0))
+            join_timeout_s = LIVE_SESSION_READY_TIMEOUT_S + LIVE_FINAL_TIMEOUT_S + 2.0
             realtime_worker.join(timeout=join_timeout_s)
             if realtime_worker.is_alive():
                 log(
                     "[Realtime] Stream worker timed out; strict server-side mode will not fall back."
                 )
+                if not cancel_realtime_worker(
+                    realtime_worker,
+                    realtime_stop_event,
+                    realtime_cancel_event,
+                ):
+                    log("[Realtime] Stream worker did not stop after cancellation.")
                 log(
                     "[Realtime] Check network stability and realtime model access for your API key."
                 )
@@ -2597,8 +2649,9 @@ def start_listening(
     action = "Tap" if toggle_mode else "Hold"
     use_realtime_streaming = transcription_engine == TRANSCRIPTION_ENGINE_LIVE
     realtime_worker: threading.Thread | None = None
-    realtime_queue: queue.Queue[np.ndarray] | None = None
+    realtime_audio_buffer: RealtimeAudioBuffer | None = None
     realtime_stop_event: threading.Event | None = None
+    realtime_cancel_event: threading.Event | None = None
     realtime_result: dict[str, str] = {"text": ""}
     realtime_delta_parts: list[str] = []
     realtime_delta_lock = threading.Lock()
@@ -2614,8 +2667,9 @@ def start_listening(
 
     on_audio_chunk: Callable[[np.ndarray], None] | None = None
     if use_realtime_streaming:
-        realtime_queue = queue.Queue(maxsize=512)
+        realtime_audio_buffer = RealtimeAudioBuffer()
         realtime_stop_event = threading.Event()
+        realtime_cancel_event = threading.Event()
 
         def on_delta_text(delta_text: str) -> None:
             with realtime_delta_lock:
@@ -2634,22 +2688,20 @@ def start_listening(
                     log("[Realtime] Live typing paste fallback failed:", paste_exc)
 
         def run_realtime_stream() -> None:
-            assert realtime_queue is not None
+            assert realtime_audio_buffer is not None
             assert realtime_stop_event is not None
             realtime_result["text"] = transcribe_with_gpt_live_stream(
-                realtime_queue,
+                realtime_audio_buffer.queue,
                 realtime_stop_event,
                 on_delta=on_delta_text,
+                cancel_event=realtime_cancel_event,
             )
 
         realtime_worker = threading.Thread(target=run_realtime_stream, daemon=True)
 
         def on_audio_chunk(chunk: np.ndarray) -> None:
-            assert realtime_queue is not None
-            try:
-                realtime_queue.put_nowait(chunk)
-            except queue.Full:
-                return
+            assert realtime_audio_buffer is not None
+            realtime_audio_buffer.put(chunk)
 
     recorder, recorder_retries = build_session_recorder(
         audio_source,
@@ -2667,10 +2719,12 @@ def start_listening(
     )
     stream_ready_at = time.monotonic()
     if not started:
-        if realtime_stop_event is not None:
-            realtime_stop_event.set()
-        if realtime_worker is not None:
-            realtime_worker.join(timeout=1.0)
+        cancel_realtime_worker(
+            realtime_worker,
+            realtime_stop_event,
+            realtime_cancel_event,
+            join_timeout_s=1.0,
+        )
         log(f"[Audio] {label} start aborted; no usable input device.")
         abort_session(session_id)
         return
@@ -2694,6 +2748,11 @@ def start_listening(
     finally:
         capture_timestamps = stop_capture_session(recorder, session_id)
     if capture_error is not None:
+        cancel_realtime_worker(
+            realtime_worker,
+            realtime_stop_event,
+            realtime_cancel_event,
+        )
         abandon_output_turn(session_id)
         return
 
@@ -2715,12 +2774,12 @@ def start_listening(
         f"[Capture metrics] stream-ready={stream_ready_ms:.0f} ms | "
         f"first-audio={first_audio_ms:.0f} ms | pre-roll={pre_roll_ms:.0f} ms"
     )
-    if MICROPHONE_PRE_ROLL_ENABLED:
-        with state.lock:
-            selected_microphone_index = state.dictation_device_index
-        if not warm_microphone_capture.is_ready_for(selected_microphone_index):
-            warm_microphone_capture.start(selected_microphone_index)
-
+    if realtime_audio_buffer is not None and realtime_audio_buffer.drop_count():
+        log(
+            "[Realtime] Audio queue overflow: "
+            f"dropped {realtime_audio_buffer.drop_count()} chunks "
+            f"({BLOCK_DUR_S * 1000:.0f} ms each)."
+        )
     with buffer_lock:
         chunks = [chunk.copy() for chunk in record_buffer]
     outcome = finalize_session_transcription(
@@ -2734,6 +2793,7 @@ def start_listening(
         post_process_instruction_profile=post_process_instruction_profile,
         realtime_worker=realtime_worker,
         realtime_stop_event=realtime_stop_event,
+        realtime_cancel_event=realtime_cancel_event,
         realtime_result=realtime_result,
     )
     deliver_session_output(
@@ -3774,26 +3834,57 @@ def build_menu() -> pystray.Menu:
     )
 
 
-def maintain_warm_microphone_capture() -> None:
+def maintain_warm_microphone_capture() -> bool:
     if not MICROPHONE_PRE_ROLL_ENABLED:
-        return
+        return True
     with state.lock:
         if state.is_listening:
-            return
+            return True
         microphone_device_index = state.dictation_device_index
     if warm_microphone_capture.is_ready_for(microphone_device_index):
-        return
+        return True
     log("[Audio] Warm microphone stream is inactive or stale; reopening it.")
-    warm_microphone_capture.start(microphone_device_index)
+    return warm_microphone_capture.start(microphone_device_index)
+
+
+def warm_microphone_watchdog_loop() -> None:
+    delay_s = 0.0
+    while not shutdown_event.is_set() and not warm_microphone_watchdog_stop.wait(delay_s):
+        recovered = maintain_warm_microphone_capture()
+        delay_s = (
+            WARM_MICROPHONE_HEALTH_CHECK_INTERVAL_S
+            if recovered
+            else min(
+                WARM_MICROPHONE_RETRY_MAX_S,
+                max(2.0, delay_s * 2.0),
+            )
+        )
+
+
+def start_warm_microphone_watchdog() -> None:
+    global warm_microphone_watchdog_thread
+    if not MICROPHONE_PRE_ROLL_ENABLED:
+        return
+    if warm_microphone_watchdog_thread is not None and warm_microphone_watchdog_thread.is_alive():
+        return
+    warm_microphone_watchdog_stop.clear()
+    warm_microphone_watchdog_thread = threading.Thread(
+        target=warm_microphone_watchdog_loop,
+        name="warm-microphone-watchdog",
+        daemon=True,
+    )
+    warm_microphone_watchdog_thread.start()
+
+
+def stop_warm_microphone_watchdog() -> None:
+    warm_microphone_watchdog_stop.set()
+    worker = warm_microphone_watchdog_thread
+    if worker is not None and worker is not threading.current_thread():
+        worker.join(timeout=1.0)
 
 
 def tray_animation_loop() -> None:
-    next_microphone_health_check = 0.0
     while not shutdown_event.is_set():
-        now = time.monotonic()
-        if now >= next_microphone_health_check:
-            maintain_warm_microphone_capture()
-            next_microphone_health_check = now + WARM_MICROPHONE_HEALTH_CHECK_INTERVAL_S
         if not keyboard_listener_is_running():
             try:
                 start_keyboard_listener()
@@ -3840,10 +3931,7 @@ def start_tray_animation_loop() -> None:
 def tray_setup(_icon: TrayIconLike) -> None:
     global tray_status_signature
     _icon.visible = True  # required when using a custom setup callback
-    if MICROPHONE_PRE_ROLL_ENABLED:
-        with state.lock:
-            microphone_device_index = state.dictation_device_index
-        warm_microphone_capture.start(microphone_device_index)
+    start_warm_microphone_watchdog()
     reset_tray_visual_state()
     tray_status_signature = None
     enforce_transcription_engine_dependencies()
@@ -3870,6 +3958,7 @@ def tray_setup(_icon: TrayIconLike) -> None:
 def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
     global tray_status_signature
     shutdown_event.set()
+    stop_warm_microphone_watchdog()
     warm_microphone_capture.stop()
     stop_input_listeners()
     stop_transcript_browser()
@@ -3906,6 +3995,7 @@ def main() -> None:
         log("\nExiting...")
         tray_exit(tray_icon)
     finally:
+        stop_warm_microphone_watchdog()
         warm_microphone_capture.stop()
         stop_input_listeners()
         stop_transcript_browser()

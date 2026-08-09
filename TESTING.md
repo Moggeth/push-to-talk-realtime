@@ -155,6 +155,7 @@ CI now runs:
 - After a fresh Windows login, wait at least 90 seconds and then press F13 once. Expected: the service has rebound the listener after startup and dictation begins without manually restarting the tray.
 - Speak immediately as F13 is pressed. Expected: the opening syllable is retained, and the log records `[Capture metrics]` with stream-ready, first-audio, and pre-roll timings.
 - Leave the app running through a microphone disconnect, sleep/wake, or device reset. Expected: the log records `[Audio] Warm microphone stream is inactive or stale; reopening it.` and subsequent captures contain audio.
+- Expected: tray animation and hotkey-listener recovery remain responsive while the microphone watchdog is attempting a slow or failing reopen.
 
 3) Set Hotkey dialog
 - Open `Shortcuts & startup`, click `Dictation: <current>...`, press a key or combo, confirm the drafted label looks right, then click `Accept`.
@@ -168,6 +169,8 @@ CI now runs:
 - Expected: logs identify `gpt-live-transcribe`; no fallback model or local chunking path appears.
 - Expected: releasing F13 sends one explicit audio-buffer commit and the completed transcript replaces any partial result.
 - Expected: after release, any brief server reconciliation uses a static orange finalizing icon rather than the spinning orange recorded-transcription waveform.
+- Interrupt connectivity during a live capture. Expected: the worker exits after the bounded ready/final deadline and cancellation grace period, with no recorded-model fallback and no lingering realtime thread.
+- If a deliberately constrained `REALTIME_AUDIO_QUEUE_MAX_CHUNKS` overflows, expected: the dropped 40 ms chunk count is written to the log after capture.
 
 5) Shared input device menu
 - Open the tray menu, choose `Audio input: <current>`, then select a different microphone/input.
@@ -311,4 +314,6 @@ CI now runs:
 - Start the app once. Expected: the file moves to the platform runtime-data directory and the migration is logged.
 - Expected: an explicit `WORK_LOG_PATH`, `PUSH_TO_TALK_TRANSCRIPT_DB_PATH`, `PUSH_TO_TALK_LOG_PATH`, or `OPENAI_POST_PROCESS_INSTRUCTIONS_PATH` prevents migration for that file.
 
-Development note: after structural Python edits, run `ruff format` on the changed files before `ruff check`. This avoids repeating the import-order and wrapping-only failure seen during the runtime-path extraction; behavioral tests had already passed in that case.
+Development note: after structural Python edits, run `ruff format` on the changed files as the final step after the last patch, then run `ruff check` and `ruff format --check`. This avoids repeating the import-order and wrapping-only failures seen during the runtime-path and watchdog extractions; behavioral tests had already passed in the first case, and the second check stopped before tests.
+
+Threaded tray tests must isolate every worker started by `tray_setup` and stop it in fixture teardown. The watchdog extraction initially exposed one test that mocked the animation worker but not the new microphone worker; the faster repeatable pattern is to mock the worker start in setup tests and call its stop helper in the shared fixture.

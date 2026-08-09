@@ -224,6 +224,7 @@ Environment variables:
 - `OPENAI_LIVE_TRANSCRIBE_PROMPT` (optional): contextual vocabulary or names for live transcription.
 - `OPENAI_LIVE_TRANSCRIBE_DELAY` (optional): live model latency preference, default `low`.
 - `OPENAI_REALTIME_WS_URL` (optional): websocket URL for realtime transcription, default `wss://api.openai.com/v1/realtime?intent=transcription`.
+- `REALTIME_AUDIO_QUEUE_MAX_CHUNKS` (optional): bounded number of 40 ms chunks awaiting realtime upload, default `512`; overflow is counted and logged after capture.
 - `OPENAI_POST_PROCESS_MODEL` (optional): initial GPT post-processing model, default `gpt-5.6-luna`; tray selections are persisted in `settings.json`.
 - `OPENAI_POST_PROCESS_INSTRUCTIONS_PATH` (optional): custom instruction file path, default `post_process_instructions.txt` in the platform runtime-data directory.
 - `REALTIME_LIVE_TYPING` (optional): `1` (default) enables live delta typing for dictation, `0` disables it.
@@ -293,9 +294,9 @@ Notes and tips
 - Paste suffix options affect dictation paste only.
 - Tray icon color: green when idle, red for microphone recording, blue for system-audio recording, orange while transcribing, and magenta while GPT post-processing. Non-AppIndicator backends use a crisp comet ring plus an animated waveform for transcription and sparkle for GPT work; color changes settle over two target-dominant frames without delaying the state change.
 - The warm microphone pre-roll remains local and is discarded continuously while idle. Only the bounded audio immediately preceding an actual trigger is included in that recording. If the warm stream cannot open, the app logs the failure and retains the previous open-on-press fallback.
-- The warm microphone stream is considered stale after two seconds without an audio callback and is reopened automatically while idle.
+- The warm microphone stream is considered stale after two seconds without an audio callback and is reopened automatically while idle. Recovery runs on a dedicated watchdog with bounded retry backoff, so a slow device open cannot stall tray animation or hotkey-listener checks.
 - While an earlier transcript is still processing, you can start a new recording; completed dictations are pasted in the order the recordings started.
 - Failed or aborted sessions release their output slot immediately. If an earlier API request remains stalled beyond the configured output wait, newer completed dictation proceeds and any late older result is discarded instead of pasting out of order.
 - Realtime live typing applies only to dictation mode and may need app focus to stay in the target field.
-- GPT Live Transcribe has no fallback model or local chunking path. A failed live session is logged instead of silently changing transcription engines.
+- GPT Live Transcribe has no fallback model or local chunking path. A failed live session is logged instead of silently changing transcription engines. Realtime shutdown allows the configured ready and final-response deadlines, then explicitly cancels the worker; queue overflow is reported rather than silently ignored.
 - If realtime dependencies are missing, GPT Live Transcribe selection logs an install hint and stays on recorded mode.

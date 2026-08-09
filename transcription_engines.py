@@ -120,6 +120,7 @@ def run_live_session(
     stop_event: threading.Event,
     config: LiveTranscriptionConfig,
     on_delta: Callable[[str], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> str:
     websocket.send(json.dumps(build_live_session_update(config)))
     session_ready_deadline = time.monotonic() + config.session_ready_timeout_s
@@ -131,8 +132,12 @@ def run_live_session(
     completed_by_item: dict[str, str] = {}
 
     while True:
+        if cancel_event is not None and cancel_event.is_set():
+            return ""
         if session_ready and not committed:
             while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    return ""
                 try:
                     chunk = audio_queue.get_nowait()
                 except queue.Empty:
@@ -207,6 +212,7 @@ def transcribe_live_stream(
     stop_event: threading.Event,
     config: LiveTranscriptionConfig,
     on_delta: Callable[[str], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> str:
     from websockets.sync.client import connect
 
@@ -217,4 +223,11 @@ def transcribe_live_stream(
         close_timeout=2,
         max_size=2**22,
     ) as websocket:
-        return run_live_session(websocket, audio_queue, stop_event, config, on_delta)
+        return run_live_session(
+            websocket,
+            audio_queue,
+            stop_event,
+            config,
+            on_delta,
+            cancel_event,
+        )

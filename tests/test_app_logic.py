@@ -34,10 +34,11 @@ class FakeTrayIcon:
 class FakeThread:
     created: ClassVar[list[FakeThread]] = []
 
-    def __init__(self, target, args=(), daemon=False):
+    def __init__(self, target, args=(), daemon=False, name=None):
         self.target = target
         self.args = args
         self.daemon = daemon
+        self.name = name
         self.started = False
         FakeThread.created.append(self)
 
@@ -47,6 +48,8 @@ class FakeThread:
 
 @pytest.fixture(autouse=True)
 def reset_app_state(monkeypatch, tmp_path: Path):
+    app.stop_warm_microphone_watchdog()
+    app.warm_microphone_watchdog_thread = None
     app.warm_microphone_capture.stop()
     app.state = app.SessionState()
     app.tray_icon = None
@@ -65,6 +68,9 @@ def reset_app_state(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(app, "transcript_store", TranscriptStore(tmp_path / "transcripts.db"))
     FakeThread.created.clear()
     yield
+    app.shutdown_event.set()
+    app.stop_warm_microphone_watchdog()
+    app.warm_microphone_watchdog_thread = None
     app.warm_microphone_capture.stop()
 
 
@@ -1253,12 +1259,50 @@ def test_maintain_warm_microphone_capture_reopens_inactive_stream(monkeypatch):
         app.state.is_listening = False
         app.state.dictation_device_index = 7
 
-    app.maintain_warm_microphone_capture()
+    assert app.maintain_warm_microphone_capture() is True
 
     assert calls == [
         ("log", "[Audio] Warm microphone stream is inactive or stale; reopening it."),
         ("start", 7),
     ]
+
+
+def test_warm_microphone_watchdog_backs_off_after_failed_reopen(monkeypatch):
+    waits = []
+    recoveries = iter([False, False, True])
+
+    class FakeStop:
+        def wait(self, delay):
+            waits.append(delay)
+            return len(waits) > 3
+
+        def set(self):
+            return None
+
+    monkeypatch.setattr(app, "warm_microphone_watchdog_stop", FakeStop())
+    monkeypatch.setattr(app, "maintain_warm_microphone_capture", lambda: next(recoveries))
+
+    app.warm_microphone_watchdog_loop()
+
+    assert waits == [0.0, 2.0, 4.0, app.WARM_MICROPHONE_HEALTH_CHECK_INTERVAL_S]
+
+
+def test_realtime_audio_buffer_counts_overflow():
+    audio_buffer = app.RealtimeAudioBuffer(max_chunks=1)
+
+    assert audio_buffer.put(np.array([1], dtype=np.int16)) is True
+    assert audio_buffer.put(np.array([2], dtype=np.int16)) is False
+    assert audio_buffer.drop_count() == 1
+
+
+def test_cancel_realtime_worker_handles_thread_that_never_started():
+    worker = threading.Thread(target=lambda: None)
+    stop_event = threading.Event()
+    cancel_event = threading.Event()
+
+    assert app.cancel_realtime_worker(worker, stop_event, cancel_event) is True
+    assert stop_event.is_set() is True
+    assert cancel_event.is_set() is True
 
 
 def test_set_input_device_updates_both_modes_and_refreshes_menu(monkeypatch):
@@ -1570,7 +1614,6 @@ def test_tray_animation_loop_restarts_dead_keyboard_listener(monkeypatch):
     monkeypatch.setattr(app, "start_keyboard_listener", lambda: calls.append("start"))
     monkeypatch.setattr(app, "log", lambda *args: calls.append(" ".join(map(str, args))))
     monkeypatch.setattr(app, "update_tray_icon", lambda: calls.append("icon"))
-    monkeypatch.setattr(app, "maintain_warm_microphone_capture", lambda: None)
     monkeypatch.setattr(app.time, "sleep", lambda _seconds: app.shutdown_event.set())
 
     app.tray_animation_loop()
@@ -2132,13 +2175,17 @@ def test_tray_setup_marks_icon_visible_and_starts_listener(monkeypatch):
     )
     monkeypatch.setattr(app, "enforce_transcription_engine_dependencies", lambda: None)
     monkeypatch.setattr(app, "start_transcription_warmup", lambda: None)
-    monkeypatch.setattr(app.warm_microphone_capture, "start", lambda _device: True)
+    monkeypatch.setattr(
+        app,
+        "start_warm_microphone_watchdog",
+        lambda: start_calls.append("microphone-watchdog"),
+    )
 
     app.tray_setup(icon)
 
     assert icon.visible is True
     assert refresh_calls == ["refresh"]
-    assert start_calls == ["start"]
+    assert start_calls == ["microphone-watchdog", "start"]
     assert animation_calls == ["animation"]
     assert logs == [
         (
