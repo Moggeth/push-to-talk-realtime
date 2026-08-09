@@ -207,6 +207,11 @@ MICROPHONE_PRE_ROLL_ENABLED = os.getenv("MICROPHONE_PRE_ROLL_ENABLED", "1").stri
     "no",
     "off",
 }
+WARM_MICROPHONE_STALE_AFTER_S = max(
+    0.5,
+    float(os.getenv("WARM_MICROPHONE_STALE_AFTER_S", "2.0")),
+)
+WARM_MICROPHONE_HEALTH_CHECK_INTERVAL_S = 1.0
 
 # Behavior
 MODE_DICTATION = "dictation"
@@ -1705,6 +1710,7 @@ class WarmMicrophoneCapture:
         self.active_buffer: list | None = None
         self.active_buffer_lock: threading.Lock | None = None
         self.active_on_chunk: Callable[[np.ndarray], None] | None = None
+        self.last_callback_at = 0.0
 
     def _callback(self, indata, frames, time_info, status) -> None:
         del frames, time_info
@@ -1714,6 +1720,7 @@ class WarmMicrophoneCapture:
         if not pcm_i16.size:
             return
         with self.lock:
+            self.last_callback_at = time.monotonic()
             if self.active_token is None:
                 self.pre_roll.append(pcm_i16.copy())
                 return
@@ -1725,7 +1732,18 @@ class WarmMicrophoneCapture:
 
     def is_ready_for(self, device_index: int | None) -> bool:
         with self.lock:
-            return self.stream is not None and self.device_index == device_index
+            stream = self.stream
+            if stream is None or self.device_index != device_index:
+                return False
+            try:
+                stream_active = bool(getattr(stream, "active", True))
+            except Exception:  # pylint: disable=broad-except
+                stream_active = False
+            callback_fresh = (
+                self.last_callback_at > 0
+                and time.monotonic() - self.last_callback_at <= WARM_MICROPHONE_STALE_AFTER_S
+            )
+            return stream_active and callback_fresh
 
     def start(self, device_index: int | None) -> bool:
         with self.stream_lock:
@@ -1748,6 +1766,7 @@ class WarmMicrophoneCapture:
             with self.lock:
                 self.stream = stream
                 self.device_index = device_index
+                self.last_callback_at = time.monotonic()
                 self.pre_roll.clear()
             log(
                 f"[Audio] Microphone pre-roll ready ({MICROPHONE_PRE_ROLL_MS} ms, "
@@ -1764,6 +1783,7 @@ class WarmMicrophoneCapture:
             self.active_buffer = None
             self.active_buffer_lock = None
             self.active_on_chunk = None
+            self.last_callback_at = 0.0
             self.pre_roll.clear()
         if stream is not None:
             with suppress(Exception):
@@ -3698,8 +3718,26 @@ def build_menu() -> pystray.Menu:
     )
 
 
+def maintain_warm_microphone_capture() -> None:
+    if not MICROPHONE_PRE_ROLL_ENABLED:
+        return
+    with state.lock:
+        if state.is_listening:
+            return
+        microphone_device_index = state.dictation_device_index
+    if warm_microphone_capture.is_ready_for(microphone_device_index):
+        return
+    log("[Audio] Warm microphone stream is inactive or stale; reopening it.")
+    warm_microphone_capture.start(microphone_device_index)
+
+
 def tray_animation_loop() -> None:
+    next_microphone_health_check = 0.0
     while not shutdown_event.is_set():
+        now = time.monotonic()
+        if now >= next_microphone_health_check:
+            maintain_warm_microphone_capture()
+            next_microphone_health_check = now + WARM_MICROPHONE_HEALTH_CHECK_INTERVAL_S
         if not keyboard_listener_is_running():
             try:
                 start_keyboard_listener()

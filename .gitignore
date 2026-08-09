@@ -23,6 +23,7 @@ ENV/
 .env
 .env.*
 *.log
+logs/
 
 # Editor and OS clutter
 .vscode/

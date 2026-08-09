@@ -148,6 +148,19 @@ On Ubuntu/AppIndicator, the tray backend now favors stability over live icon
 animation. Status changes still show up in the log file, which makes it easier
 to diagnose hotkey/listener/tray issues when the desktop shell is flaky.
 
+Troubleshooting
+---------------
+- If the tray icon and hotkey are both absent, run `python .\start_push_to_talk.py`.
+  A startup-manager launch may retain `..` in its command line, so diagnostics
+  should search all Python command lines for `push_to_talk_realtime.py` rather
+  than comparing only against the resolved checkout path.
+- If a long-running microphone session produces `first-audio=0 ms` and
+  `pre-roll=0 ms`, the warm PortAudio stream has stopped delivering callbacks.
+  The app now checks that stream once per second and automatically reopens it;
+  the next press also uses the normal recorder if recovery has not completed.
+- The current process, selected engine, listener startup, stream recovery, and
+  capture timing can be checked in `push_to_talk_realtime.log`.
+
 Development
 -----------
 Basic checks (see `TESTING.md` for the full, plain-language plan):
@@ -268,6 +281,7 @@ Notes and tips
 - Paste suffix options affect dictation paste only.
 - Tray icon color: green when idle, red for microphone recording, blue for system-audio recording, orange while transcribing, and magenta while GPT post-processing. Non-AppIndicator backends use a crisp comet ring plus an animated waveform for transcription and sparkle for GPT work; color changes settle over two target-dominant frames without delaying the state change.
 - The warm microphone pre-roll remains local and is discarded continuously while idle. Only the bounded audio immediately preceding an actual trigger is included in that recording. If the warm stream cannot open, the app logs the failure and retains the previous open-on-press fallback.
+- The warm microphone stream is considered stale after two seconds without an audio callback and is reopened automatically while idle.
 - While an earlier transcript is still processing, you can start a new recording; completed dictations are pasted in the order the recordings started.
 - Realtime live typing applies only to dictation mode and may need app focus to stay in the target field.
 - GPT Live Transcribe has no fallback model or local chunking path. A failed live session is logged instead of silently changing transcription engines.

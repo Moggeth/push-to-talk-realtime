@@ -1166,6 +1166,60 @@ def test_warm_microphone_capture_prepends_bounded_pre_roll(monkeypatch):
     assert streams[0].closed is True
 
 
+def test_warm_microphone_capture_reopens_stale_stream(monkeypatch):
+    streams = []
+
+    class FakeStream:
+        active = True
+
+        def __init__(self, **_kwargs):
+            self.stopped = False
+            self.closed = False
+            streams.append(self)
+
+        def start(self):
+            return None
+
+        def stop(self):
+            self.stopped = True
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(app.sd, "InputStream", FakeStream)
+    capture = app.WarmMicrophoneCapture(pre_roll_ms=80)
+    assert capture.start(3) is True
+    capture.last_callback_at = app.time.monotonic() - app.WARM_MICROPHONE_STALE_AFTER_S - 1.0
+
+    assert capture.is_ready_for(3) is False
+    assert capture.start(3) is True
+    assert len(streams) == 2
+    assert streams[0].stopped is True
+    assert streams[0].closed is True
+    capture.stop()
+
+
+def test_maintain_warm_microphone_capture_reopens_inactive_stream(monkeypatch):
+    calls = []
+    monkeypatch.setattr(app.warm_microphone_capture, "is_ready_for", lambda _device: False)
+    monkeypatch.setattr(
+        app.warm_microphone_capture,
+        "start",
+        lambda device: calls.append(("start", device)) or True,
+    )
+    monkeypatch.setattr(app, "log", lambda *args: calls.append(("log", *args)))
+    with app.state.lock:
+        app.state.is_listening = False
+        app.state.dictation_device_index = 7
+
+    app.maintain_warm_microphone_capture()
+
+    assert calls == [
+        ("log", "[Audio] Warm microphone stream is inactive or stale; reopening it."),
+        ("start", 7),
+    ]
+
+
 def test_set_input_device_updates_both_modes_and_refreshes_menu(monkeypatch):
     refresh_calls = []
     monkeypatch.setattr(app, "refresh_tray_menu", lambda: refresh_calls.append("refresh"))
@@ -1475,6 +1529,7 @@ def test_tray_animation_loop_restarts_dead_keyboard_listener(monkeypatch):
     monkeypatch.setattr(app, "start_keyboard_listener", lambda: calls.append("start"))
     monkeypatch.setattr(app, "log", lambda *args: calls.append(" ".join(map(str, args))))
     monkeypatch.setattr(app, "update_tray_icon", lambda: calls.append("icon"))
+    monkeypatch.setattr(app, "maintain_warm_microphone_capture", lambda: None)
     monkeypatch.setattr(app.time, "sleep", lambda _seconds: app.shutdown_event.set())
 
     app.tray_animation_loop()

@@ -60,7 +60,7 @@ CI now runs:
   - Persisted dictation hotkey kind/tokens, GPT Live default, archived GPT-4o/Whisper model migration to GPT Transcribe, checkout-to-user-data settings migration, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, grouped menu hierarchy and bounded active-value labels, tray startup/shutdown, and `main()` bootstrap wiring.
   - GPT Live Transcribe session configuration, 16-to-24 kHz audio streaming, append/commit ordering, completed transcript reconciliation, and structured API errors.
   - Extracted transcription-engine compatibility through the app boundary, including recorded request payloads and realtime websocket events.
-  - Warm microphone stream lifecycle, bounded pre-roll ordering, first-audio measurement, and static realtime finalizing visuals.
+  - Warm microphone stream lifecycle, bounded pre-roll ordering, stale-callback detection, automatic reopen, first-audio measurement, and static realtime finalizing visuals.
   - GPT post-processing model/profile persistence, tray controls, custom instruction loading, Responses API payloads, blank-input handling, raw-transcript fallback on API failure, reference-counted processing state, target-dominant color transitions, and distinct activity animation frames.
   - Always-on SQLite transcript storage, raw-before-GPT ordering, finalization and failure status, search, deletion, HTML escaping, loopback browser requests, deletion-token validation, and browser shutdown.
   - Single-instance startup guard, hotkey-listener watchdog restart, and delayed restart helper behavior.
@@ -153,6 +153,7 @@ CI now runs:
 - Immediately after launch, do one short hold/release. Expected: the release is honored even if the audio session is still starting.
 - After a fresh Windows login, wait at least 90 seconds and then press F13 once. Expected: the service has rebound the listener after startup and dictation begins without manually restarting the tray.
 - Speak immediately as F13 is pressed. Expected: the opening syllable is retained, and the log records `[Capture metrics]` with stream-ready, first-audio, and pre-roll timings.
+- Leave the app running through a microphone disconnect, sleep/wake, or device reset. Expected: the log records `[Audio] Warm microphone stream is inactive or stale; reopening it.` and subsequent captures contain audio.
 
 3) Set Hotkey dialog
 - Open `Shortcuts & startup`, click `Dictation: <current>...`, press a key or combo, confirm the drafted label looks right, then click `Accept`.
