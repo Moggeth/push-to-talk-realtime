@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 
 import push_to_talk_realtime as app
+from transcription_engines import build_live_session_update, run_live_session
 
 
 class FakeWebSocket:
@@ -31,7 +32,7 @@ def test_live_session_event_uses_current_transcription_contract(monkeypatch):
     monkeypatch.setattr(app, "LIVE_TRANSCRIBE_PROMPT", "Names: Ada, Linus")
     monkeypatch.setattr(app, "LIVE_TRANSCRIBE_DELAY", "low")
 
-    event = app.build_live_transcription_session_update_event()
+    event = build_live_session_update(app.live_transcription_config())
     input_config = event["session"]["audio"]["input"]
 
     assert event["type"] == "session.update"
@@ -69,7 +70,13 @@ def test_live_session_streams_audio_commits_once_and_returns_completed_text():
         ]
     )
 
-    text = app.run_live_transcription_session(ws, audio_queue, stop_event, deltas.append)
+    text = run_live_session(
+        ws,
+        audio_queue,
+        stop_event,
+        app.live_transcription_config(),
+        deltas.append,
+    )
 
     assert text == "Hello world."
     assert deltas == ["Hello "]
@@ -97,7 +104,12 @@ def test_live_session_surfaces_structured_api_errors():
     )
 
     try:
-        app.run_live_transcription_session(ws, queue.Queue(), threading.Event())
+        run_live_session(
+            ws,
+            queue.Queue(),
+            threading.Event(),
+            app.live_transcription_config(),
+        )
     except RuntimeError as exc:
         assert "bad_model" in str(exc)
         assert "Unsupported model" in str(exc)
@@ -110,10 +122,11 @@ def test_live_session_honors_explicit_cancellation():
     cancel_event.set()
     ws = FakeWebSocket([])
 
-    text = app.run_live_transcription_session(
+    text = run_live_session(
         ws,
         queue.Queue(),
         threading.Event(),
+        app.live_transcription_config(),
         cancel_event=cancel_event,
     )
 
@@ -134,7 +147,7 @@ def test_recorded_transcription_sends_gpt_transcribe_model(monkeypatch):
     )
     monkeypatch.setattr(app, "get_openai_client", lambda: client)
 
-    text = app.transcribe_with_whisper(
+    text = app.transcribe_recorded_audio(
         [np.arange(160, dtype=np.int16)],
         "gpt-transcribe",
     )

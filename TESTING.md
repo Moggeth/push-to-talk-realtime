@@ -59,7 +59,7 @@ CI now runs:
   - First-press startup race handling: a release that arrives while a session is still starting is remembered and stops the new recording cleanly.
   - Persisted dictation hotkey kind/tokens, GPT Live default, archived GPT-4o/Whisper model migration to GPT Transcribe, checkout-to-user-data settings migration, default-on transcript history, startup toggle helpers, hotkey capture helper parsing, tray restart/quit actions, grouped menu hierarchy and bounded active-value labels, tray startup/shutdown, and `main()` bootstrap wiring.
   - GPT Live Transcribe session configuration, 16-to-24 kHz audio streaming, append/commit ordering, completed transcript reconciliation, and structured API errors.
-  - Extracted transcription-engine compatibility through the app boundary, including recorded request payloads and realtime websocket events.
+  - Direct transcription-engine contracts, including recorded request payloads and realtime websocket events; tests do not rely on forwarding functions in the tray module.
   - Warm microphone stream lifecycle, bounded pre-roll ordering, stale-callback detection, automatic reopen, first-audio measurement, and static realtime finalizing visuals.
   - GPT post-processing model/profile persistence, tray controls, custom instruction loading, Responses API payloads, blank-input handling, raw-transcript fallback on API failure, reference-counted processing state, target-dominant color transitions, and distinct activity animation frames.
   - Always-on SQLite transcript storage, raw-before-GPT ordering, finalization and failure status, search, deletion, HTML escaping, loopback browser requests, deletion-token validation, and browser shutdown.

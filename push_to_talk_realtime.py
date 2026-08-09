@@ -82,10 +82,7 @@ from transcript_browser import TranscriptBrowserServer, launch_transcript_browse
 from transcription_engines import (
     LiveTranscriptionConfig,
     RecordedTranscriptionConfig,
-    build_live_session_update as build_live_session_update_core,
-    resample_pcm16_mono as resample_pcm16_mono_core,
-    run_live_session as run_live_session_core,
-    transcribe_live_stream as transcribe_live_stream_core,
+    transcribe_live_stream,
     transcribe_recording,
 )
 from transcript_store import TranscriptStore
@@ -2056,7 +2053,7 @@ def build_session_recorder(
 # -------------------- Recorded transcription --------------------
 
 
-def transcribe_with_whisper(chunks: list, model_name: str | None = None) -> str:
+def transcribe_recorded_audio(chunks: list, model_name: str | None = None) -> str:
     """Send recorded buffer to the selected transcription model; return transcript or ''."""
     if not chunks:
         return ""
@@ -2080,11 +2077,6 @@ def transcribe_with_whisper(chunks: list, model_name: str | None = None) -> str:
         return ""
 
 
-# -------------------- Orchestration --------------------
-def resample_pcm16_mono(pcm: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
-    return resample_pcm16_mono_core(pcm, src_rate, dst_rate)
-
-
 def live_transcription_config() -> LiveTranscriptionConfig:
     return LiveTranscriptionConfig(
         api_key=OPENAI_API_KEY,
@@ -2100,27 +2092,6 @@ def live_transcription_config() -> LiveTranscriptionConfig:
     )
 
 
-def build_live_transcription_session_update_event() -> dict[str, Any]:
-    return build_live_session_update_core(live_transcription_config())
-
-
-def run_live_transcription_session(
-    ws: Any,
-    audio_queue: "queue.Queue[np.ndarray]",
-    stop_event: threading.Event,
-    on_delta: Callable[[str], None] | None = None,
-    cancel_event: threading.Event | None = None,
-) -> str:
-    return run_live_session_core(
-        ws,
-        audio_queue,
-        stop_event,
-        live_transcription_config(),
-        on_delta,
-        cancel_event,
-    )
-
-
 def transcribe_with_gpt_live_stream(
     audio_queue: "queue.Queue[np.ndarray]",
     stop_event: threading.Event,
@@ -2133,7 +2104,7 @@ def transcribe_with_gpt_live_stream(
         return ""
     try:
         log(f"[GPT Live Transcribe] Connecting to {REALTIME_WS_URL}.")
-        return transcribe_live_stream_core(
+        return transcribe_live_stream(
             audio_queue,
             stop_event,
             live_transcription_config(),
@@ -2148,7 +2119,7 @@ def transcribe_with_gpt_live_stream(
 def transcribe_audio(chunks: list, engine: str, recorded_model: str | None = None) -> str:
     if normalize_transcription_engine(engine) == TRANSCRIPTION_ENGINE_LIVE:
         return ""
-    return transcribe_with_whisper(chunks, recorded_model)
+    return transcribe_recorded_audio(chunks, recorded_model)
 
 
 # -------------------- Orchestration --------------------

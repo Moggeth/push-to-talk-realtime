@@ -2066,8 +2066,8 @@ def test_get_key_name_supports_keycode_and_named_keys():
     assert app.get_key_name(object()) == ""
 
 
-def test_transcribe_with_whisper_returns_empty_string_for_empty_audio():
-    assert app.transcribe_with_whisper([]) == ""
+def test_transcribe_recorded_audio_returns_empty_string_for_empty_audio():
+    assert app.transcribe_recorded_audio([]) == ""
 
 
 def test_ensure_and_open_work_log_create_file_and_log_path(monkeypatch, tmp_path: Path):
