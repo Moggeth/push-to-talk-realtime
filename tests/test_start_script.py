@@ -65,7 +65,7 @@ def test_spawn_detached_background_passes_foreground_flag(monkeypatch, tmp_path:
 
         return DummyProcess()
 
-    monkeypatch.setattr(starter, "LOG_PATH", log_path)
+    monkeypatch.setattr(starter, "LAUNCHER_LOG_PATH", log_path)
     monkeypatch.setattr(starter, "startup_python_executable", lambda executable: executable)
     monkeypatch.setattr(starter.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(starter.platform, "system", lambda: "Linux")

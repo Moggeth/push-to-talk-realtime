@@ -46,6 +46,12 @@ from platform_input import (
     send_paste_shortcut,
     try_insert_text_into_target,
 )
+from runtime_paths import (
+    default_settings_path,
+    migrate_legacy_runtime_files,
+    resolve_runtime_paths,
+    rotate_file,
+)
 from startup_integration import (
     StartupContext,
 )
@@ -242,41 +248,16 @@ WORKLOG_DOUBLE_TAP_WINDOW_S = 0.4
 WORKLOG_TAP_MAX_S = 0.25
 SCRIPT_DIR = Path(__file__).resolve().parent
 STARTER_SCRIPT_PATH = SCRIPT_DIR / "start_push_to_talk.py"
-WORK_LOG_PATH = Path(os.getenv("WORK_LOG_PATH") or (SCRIPT_DIR / "work_log.txt"))
-
-
-def default_settings_path(
-    system_name: str | None = None,
-    environment: dict[str, str] | None = None,
-    home: Path | None = None,
-) -> Path:
-    system_name = system_name or platform.system()
-    environment = environment if environment is not None else os.environ
-    home = home or Path.home()
-    if system_name == "Windows":
-        root = environment.get("LOCALAPPDATA") or environment.get("APPDATA")
-        return (
-            Path(root) / "PushToTalkRealtime" / "settings.json"
-            if root
-            else (home / "AppData" / "Local" / "PushToTalkRealtime" / "settings.json")
-        )
-    if system_name == "Darwin":
-        return home / "Library" / "Application Support" / "PushToTalkRealtime" / "settings.json"
-    config_root = Path(environment.get("XDG_CONFIG_HOME") or (home / ".config"))
-    return config_root / "push-to-talk-realtime" / "settings.json"
-
-
+RUNTIME_PATHS = resolve_runtime_paths()
 DEFAULT_SETTINGS_PATH = default_settings_path()
 LEGACY_SETTINGS_PATH = SCRIPT_DIR / "settings.json"
 SETTINGS_PATH = Path(os.getenv("PUSH_TO_TALK_SETTINGS_PATH") or DEFAULT_SETTINGS_PATH)
-LOG_PATH = Path(os.getenv("PUSH_TO_TALK_LOG_PATH") or (SCRIPT_DIR / "push_to_talk_realtime.log"))
-TRANSCRIPT_DB_PATH = Path(
-    os.getenv("PUSH_TO_TALK_TRANSCRIPT_DB_PATH") or (SCRIPT_DIR / "transcripts.db")
-)
-POST_PROCESS_INSTRUCTIONS_PATH = Path(
-    os.getenv("OPENAI_POST_PROCESS_INSTRUCTIONS_PATH")
-    or (SCRIPT_DIR / "post_process_instructions.txt")
-)
+LOG_PATH = RUNTIME_PATHS.log
+TRANSCRIPT_DB_PATH = RUNTIME_PATHS.transcript_db
+WORK_LOG_PATH = RUNTIME_PATHS.work_log
+POST_PROCESS_INSTRUCTIONS_PATH = RUNTIME_PATHS.post_process_instructions
+LOG_MAX_BYTES = max(64 * 1024, int(os.getenv("PUSH_TO_TALK_LOG_MAX_BYTES", str(5 * 1024 * 1024))))
+LOG_BACKUP_COUNT = max(1, int(os.getenv("PUSH_TO_TALK_LOG_BACKUP_COUNT", "3")))
 HOTKEY_CAPTURE_HELPER_PATH = SCRIPT_DIR / "hotkey_capture_helper.py"
 SYSTEMD_SERVICE_NAME = os.getenv("PUSH_TO_TALK_SERVICE_NAME", "push-to-talk-realtime.service")
 SYSTEMD_MANAGED_ENV = "PUSH_TO_TALK_MANAGED_BY_SYSTEMD"
@@ -588,6 +569,7 @@ def log(*a):
             print(safe_message, flush=True)
         try:
             LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            rotate_file(LOG_PATH, LOG_MAX_BYTES, LOG_BACKUP_COUNT)
             with LOG_PATH.open("a", encoding="utf-8") as handle:
                 handle.write(f"{line}\n")
         except Exception as exc:  # pylint: disable=broad-except
@@ -3907,6 +3889,11 @@ def main() -> None:
         log("[Startup] Another push-to-talk instance is already running; exiting.")
         return
     try:
+        moved_files, migration_failures = migrate_legacy_runtime_files(RUNTIME_PATHS, SCRIPT_DIR)
+        for source, destination in moved_files:
+            log(f"[Storage] Migrated {source.name} to {destination}.")
+        for source, exc in migration_failures:
+            log(f"[Storage] Unable to migrate {source}: {exc}")
         refresh_device_list()
         tray_icon = pystray.Icon(
             "push_to_talk_realtime",

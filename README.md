@@ -140,9 +140,12 @@ as `OPENAI_API_KEY`.
 
 Logging
 -------
-The app writes timestamped runtime logs to `push_to_talk_realtime.log` in the
-repo folder by default. Override that location with `PUSH_TO_TALK_LOG_PATH` if
-you want the log somewhere else.
+The app writes timestamped runtime logs to the platform runtime-data directory.
+On Windows this is `%LOCALAPPDATA%\PushToTalkRealtime\push_to_talk_realtime.log`.
+The log rotates at 5 MiB and retains three backups by default. Detached-launcher
+output uses the separate `push_to_talk_starter.log`, so it cannot contend with
+the application log. Override either location with `PUSH_TO_TALK_LOG_PATH` or
+`PUSH_TO_TALK_LAUNCHER_LOG_PATH`.
 
 On Ubuntu/AppIndicator, the tray backend now favors stability over live icon
 animation. Status changes still show up in the log file, which makes it easier
@@ -222,17 +225,21 @@ Environment variables:
 - `OPENAI_LIVE_TRANSCRIBE_DELAY` (optional): live model latency preference, default `low`.
 - `OPENAI_REALTIME_WS_URL` (optional): websocket URL for realtime transcription, default `wss://api.openai.com/v1/realtime?intent=transcription`.
 - `OPENAI_POST_PROCESS_MODEL` (optional): initial GPT post-processing model, default `gpt-5.6-luna`; tray selections are persisted in `settings.json`.
-- `OPENAI_POST_PROCESS_INSTRUCTIONS_PATH` (optional): custom instruction file path, default `post_process_instructions.txt` beside the app.
+- `OPENAI_POST_PROCESS_INSTRUCTIONS_PATH` (optional): custom instruction file path, default `post_process_instructions.txt` in the platform runtime-data directory.
 - `REALTIME_LIVE_TYPING` (optional): `1` (default) enables live delta typing for dictation, `0` disables it.
 - `PUSH_TO_TALK_SETTINGS_PATH` (optional): override the platform user-data path used for persisted tray settings.
-- `PUSH_TO_TALK_TRANSCRIPT_DB_PATH` (optional): override the always-on SQLite archive path (`transcripts.db` beside the app by default).
+- `PUSH_TO_TALK_TRANSCRIPT_DB_PATH` (optional): override the always-on SQLite archive path (`transcripts.db` in the platform runtime-data directory by default).
+- `PUSH_TO_TALK_LOG_PATH` (optional): override the application log path.
+- `PUSH_TO_TALK_LAUNCHER_LOG_PATH` (optional): override detached-launcher output, which is separate from the application log.
+- `PUSH_TO_TALK_LOG_MAX_BYTES` (optional): rotate the application log at this size, default 5 MiB.
+- `PUSH_TO_TALK_LOG_BACKUP_COUNT` (optional): number of rotated application logs to retain, default `3`.
 - `DICTATION_HOTKEY` (optional): single-key trigger for dictation, default `F13`.
 - `WORKLOG_HOTKEY` (optional): single-key trigger for work log capture, default `F14`.
 - `PUSH_TO_TALK_SERVICE_NAME` (optional): service name used by the tray `Restart` / `Quit` actions, default `push-to-talk-realtime.service`.
 - `DICTATION_DEVICE` (optional): device index or name fragment for the shared microphone input.
 - `WORKLOG_DEVICE` (optional): legacy alias for the shared microphone input when `DICTATION_DEVICE` is unset.
 - `SYSTEM_AUDIO_DEVICE` (optional): output device name fragment used by `Shift + DICTATION_HOTKEY` on Windows loopback, or an input device index/name fragment for Stereo Mix fallback; if unset, the app uses the default Windows output loopback first.
-- `WORK_LOG_PATH` (optional): custom path for `work_log.txt`.
+- `WORK_LOG_PATH` (optional): custom path for `work_log.txt`; the default is in the platform runtime-data directory.
 - `PUSH_TO_TALK_HELPER_PYTHON` (optional): override the interpreter used for the hotkey capture helper on Linux.
 - `STEREO_MIX_SEARCH` (optional): name fragment for Stereo Mix device search.
 - `MUTE_RMS_THRESHOLD` (optional): RMS threshold for mute monitor, default `0.01`.
@@ -256,7 +263,8 @@ it reconnects.
 
 Notes and tips
 --------------
-- Tray selections are stored outside the checkout so pulls and application updates do not reset them. On Windows the default is `%LOCALAPPDATA%\PushToTalkRealtime\settings.json`; the first launch migrates an existing checkout-local `settings.json` automatically. macOS uses `~/Library/Application Support/PushToTalkRealtime/settings.json`, and Linux uses `${XDG_CONFIG_HOME:-~/.config}/push-to-talk-realtime/settings.json`.
+- Settings and mutable runtime data are stored outside the checkout so pulls, OneDrive synchronization, and application updates do not interfere with them. On Windows the default directory is `%LOCALAPPDATA%\PushToTalkRealtime`; macOS uses `~/Library/Application Support/PushToTalkRealtime`; Linux settings use `${XDG_CONFIG_HOME:-~/.config}/push-to-talk-realtime` and runtime data uses `${XDG_STATE_HOME:-~/.local/state}/push-to-talk-realtime`.
+- The first exclusive startup migrates checkout-local `settings.json`, `push_to_talk_realtime.log`, `transcripts.db` (including SQLite sidecars), `work_log.txt`, and `post_process_instructions.txt` when their destination paths do not already exist. Explicit path overrides are never migrated.
 - Paste uses the standard shortcut for your platform: `Ctrl+V` on Windows/Linux
   and `Cmd+V` on macOS.
 - On Windows, record-then-paste remembers the focused control when dictation
@@ -275,7 +283,7 @@ Notes and tips
 - The `Set Hotkey...` dialog uses `tkinter` where available and falls back to GTK on Linux when launched through the system `python3` interpreter.
 - If a target app blocks simulated paste, trigger paste manually from the
   clipboard or try running the console with elevated permissions on Windows.
-- `work_log.txt` is a plain text history file. Dictations are tagged as `[Dictation]` and manual work-log captures are tagged as `[Work log]`.
+- `work_log.txt` is a plain text history file in the runtime-data directory. Dictations are tagged as `[Dictation]` and manual work-log captures are tagged as `[Work log]`.
 - `transcripts.db` is the authoritative local archive for new captures. The raw transcript is committed before GPT post-processing begins, then the same row receives the final text and processing status. Existing `work_log.txt` rows are not retroactively imported.
 - The transcript browser binds only to `127.0.0.1`, loads no external assets, escapes transcript content, and requires a per-server token for deletion requests. It stops when the tray app exits.
 - Deleting an entry in the browser removes it from `transcripts.db`; it does not rewrite older lines already appended to `work_log.txt`.

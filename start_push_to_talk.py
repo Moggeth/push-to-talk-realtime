@@ -10,11 +10,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+from runtime_paths import resolve_runtime_paths, rotate_file
 from startup_integration import linux_user_service_path, startup_python_executable
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SCRIPT_PATH = SCRIPT_DIR / "start_push_to_talk.py"
-LOG_PATH = Path(os.getenv("PUSH_TO_TALK_LOG_PATH") or (SCRIPT_DIR / "push_to_talk_realtime.log"))
+LAUNCHER_LOG_PATH = resolve_runtime_paths().launcher_log
+LAUNCHER_LOG_MAX_BYTES = max(
+    64 * 1024,
+    int(os.getenv("PUSH_TO_TALK_LAUNCHER_LOG_MAX_BYTES", str(2 * 1024 * 1024))),
+)
+LAUNCHER_LOG_BACKUP_COUNT = 2
 SYSTEMD_SERVICE_NAME = os.getenv("PUSH_TO_TALK_SERVICE_NAME", "push-to-talk-realtime.service")
 SYSTEMD_MANAGED_ENV = "PUSH_TO_TALK_MANAGED_BY_SYSTEMD"
 
@@ -62,10 +68,11 @@ def detached_popen_kwargs() -> dict[str, object]:
 
 
 def spawn_detached_background() -> int:
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LAUNCHER_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    rotate_file(LAUNCHER_LOG_PATH, LAUNCHER_LOG_MAX_BYTES, LAUNCHER_LOG_BACKUP_COUNT)
     python_executable = startup_python_executable(sys.executable)
     command = [python_executable, str(SCRIPT_PATH), "--foreground"]
-    with LOG_PATH.open("a", encoding="utf-8") as handle:
+    with LAUNCHER_LOG_PATH.open("a", encoding="utf-8") as handle:
         subprocess.Popen(
             command,
             cwd=SCRIPT_DIR,

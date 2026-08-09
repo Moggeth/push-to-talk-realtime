@@ -299,6 +299,16 @@ CI now runs:
 - Expected: GPT cleanup takes one click; selectors take two; low-frequency toggles are grouped by task.
 
 26) Runtime logging
-- Use dictation once, then inspect `push_to_talk_realtime.log`.
+- Use dictation once, then inspect `%LOCALAPPDATA%\PushToTalkRealtime\push_to_talk_realtime.log` on Windows (or the documented platform runtime-data directory).
 - Expected: each line has a timestamp and thread name.
 - Expected: tray state changes, startup details, and any unhandled thread exception are written there.
+- Expected: detached-launcher output is written to `push_to_talk_starter.log`, not appended by a second writer to the application log.
+- Set `PUSH_TO_TALK_LOG_MAX_BYTES=65536`, generate enough log output to cross the threshold, and restart or continue using the app.
+- Expected: `.1` through the configured backup count are retained and the active log continues accepting entries.
+
+27) Runtime-data migration
+- With the app stopped, place a legacy `work_log.txt` or test `transcripts.db` beside the script and ensure the corresponding runtime-data destination does not exist.
+- Start the app once. Expected: the file moves to the platform runtime-data directory and the migration is logged.
+- Expected: an explicit `WORK_LOG_PATH`, `PUSH_TO_TALK_TRANSCRIPT_DB_PATH`, `PUSH_TO_TALK_LOG_PATH`, or `OPENAI_POST_PROCESS_INSTRUCTIONS_PATH` prevents migration for that file.
+
+Development note: after structural Python edits, run `ruff format` on the changed files before `ruff check`. This avoids repeating the import-order and wrapping-only failure seen during the runtime-path extraction; behavioral tests had already passed in that case.
