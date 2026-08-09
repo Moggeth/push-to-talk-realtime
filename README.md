@@ -266,6 +266,7 @@ Notes and tips
 --------------
 - Settings and mutable runtime data are stored outside the checkout so pulls, OneDrive synchronization, and application updates do not interfere with them. On Windows the default directory is `%LOCALAPPDATA%\PushToTalkRealtime`; macOS uses `~/Library/Application Support/PushToTalkRealtime`; Linux settings use `${XDG_CONFIG_HOME:-~/.config}/push-to-talk-realtime` and runtime data uses `${XDG_STATE_HOME:-~/.local/state}/push-to-talk-realtime`.
 - The first exclusive startup migrates checkout-local `settings.json`, `push_to_talk_realtime.log`, `transcripts.db` (including SQLite sidecars), `work_log.txt`, and `post_process_instructions.txt` when their destination paths do not already exist. Explicit path overrides are never migrated.
+- Startup settings can emit a few new log lines before exclusive migration begins. If a legacy checkout log still exists, migration atomically places its older content before those startup lines instead of skipping or duplicating it.
 - Paste uses the standard shortcut for your platform: `Ctrl+V` on Windows/Linux
   and `Cmd+V` on macOS.
 - On Windows, record-then-paste remembers the focused control when dictation

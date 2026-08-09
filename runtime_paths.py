@@ -101,10 +101,23 @@ def migrate_legacy_runtime_files(
     moved: list[tuple[Path, Path]] = []
     failures: list[tuple[Path, Exception]] = []
     for environment_name, source, destination in migrations:
-        if environment.get(environment_name) or destination.exists() or not source.exists():
+        if environment.get(environment_name) or not source.exists():
             continue
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                if source.name != "push_to_talk_realtime.log":
+                    continue
+                migration_temp = destination.with_name(f"{destination.name}.migration.tmp")
+                with migration_temp.open("wb") as output:
+                    with source.open("rb") as legacy_input:
+                        shutil.copyfileobj(legacy_input, output)
+                    with destination.open("rb") as current_input:
+                        shutil.copyfileobj(current_input, output)
+                migration_temp.replace(destination)
+                source.unlink()
+                moved.append((source, destination))
+                continue
             shutil.move(str(source), str(destination))
             moved.append((source, destination))
             if source.name == "transcripts.db":

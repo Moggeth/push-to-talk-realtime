@@ -312,6 +312,7 @@ CI now runs:
 27) Runtime-data migration
 - With the app stopped, place a legacy `work_log.txt` or test `transcripts.db` beside the script and ensure the corresponding runtime-data destination does not exist.
 - Start the app once. Expected: the file moves to the platform runtime-data directory and the migration is logged.
+- For the legacy app log, expected: older checkout lines are preserved before any new startup lines already written at the destination, and the checkout copy is removed.
 - Expected: an explicit `WORK_LOG_PATH`, `PUSH_TO_TALK_TRANSCRIPT_DB_PATH`, `PUSH_TO_TALK_LOG_PATH`, or `OPENAI_POST_PROCESS_INSTRUCTIONS_PATH` prevents migration for that file.
 
 Development note: after structural Python edits, run `ruff format` on the changed files as the final step after the last patch, then run `ruff check` and `ruff format --check`. This avoids repeating the import-order and wrapping-only failures seen during the runtime-path and watchdog extractions; behavioral tests had already passed in the first case, and the second check stopped before tests.

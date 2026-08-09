@@ -67,6 +67,27 @@ def test_explicit_path_prevents_legacy_migration(tmp_path: Path):
     assert legacy_log.exists()
 
 
+def test_legacy_log_is_prepended_to_startup_lines_already_at_destination(tmp_path: Path):
+    script_dir = tmp_path / "checkout"
+    script_dir.mkdir()
+    legacy_log = script_dir / "push_to_talk_realtime.log"
+    legacy_log.write_text("legacy line\n", encoding="utf-8")
+    paths = resolve_runtime_paths(
+        {"LOCALAPPDATA": str(tmp_path / "runtime")},
+        system_name="Windows",
+        home=tmp_path,
+    )
+    paths.log.parent.mkdir(parents=True)
+    paths.log.write_text("new startup line\n", encoding="utf-8")
+
+    moved, failures = migrate_legacy_runtime_files(paths, script_dir, {})
+
+    assert failures == []
+    assert moved == [(legacy_log, paths.log)]
+    assert paths.log.read_text(encoding="utf-8") == "legacy line\nnew startup line\n"
+    assert not legacy_log.exists()
+
+
 def test_rotate_file_keeps_bounded_backups(tmp_path: Path):
     path = tmp_path / "app.log"
     path.write_text("first", encoding="utf-8")
