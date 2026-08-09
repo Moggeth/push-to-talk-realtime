@@ -211,6 +211,10 @@ Environment variables:
 - `OPENAI_API_KEY` (required): OpenAI API key with speech-to-text access.
 - `OPENAI_TRANSCRIBE_MODEL` (optional): recorded-transcription model, default `gpt-transcribe`.
 - `OPENAI_TRANSCRIBE_PROMPT` (optional): punctuation/style hint for recorded transcription.
+- `RECORDED_TRANSCRIPTION_TIMEOUT_S` (optional): maximum recorded transcription request time, default `120` seconds.
+- `POST_PROCESS_TIMEOUT_S` (optional): maximum GPT cleanup request time, default `45` seconds.
+- `OPENAI_MAX_RETRIES` (optional): SDK retries for recorded transcription and cleanup, default `1`.
+- `OUTPUT_TURN_WAIT_TIMEOUT_S` (optional): maximum time a completed session waits behind an earlier result before failing open, default `90` seconds.
 - `OPENAI_WHISPER_MODEL` / `OPENAI_WHISPER_PROMPT` are still accepted as legacy aliases.
 - `TRANSCRIPTION_ENGINE` (optional): `live` (default) or `recorded`. Legacy realtime values migrate to recorded mode.
 - `OPENAI_LIVE_TRANSCRIBE_LANGUAGES` (optional): comma-separated language hints such as `en,fr`.
@@ -283,6 +287,7 @@ Notes and tips
 - The warm microphone pre-roll remains local and is discarded continuously while idle. Only the bounded audio immediately preceding an actual trigger is included in that recording. If the warm stream cannot open, the app logs the failure and retains the previous open-on-press fallback.
 - The warm microphone stream is considered stale after two seconds without an audio callback and is reopened automatically while idle.
 - While an earlier transcript is still processing, you can start a new recording; completed dictations are pasted in the order the recordings started.
+- Failed or aborted sessions release their output slot immediately. If an earlier API request remains stalled beyond the configured output wait, newer completed dictation proceeds and any late older result is discarded instead of pasting out of order.
 - Realtime live typing applies only to dictation mode and may need app focus to stay in the target field.
 - GPT Live Transcribe has no fallback model or local chunking path. A failed live session is logged instead of silently changing transcription engines.
 - If realtime dependencies are missing, GPT Live Transcribe selection logs an install hint and stays on recorded mode.

@@ -52,7 +52,7 @@ CI now runs:
 
 ## Unit tests included (what they validate)
 
-- App orchestration and state helpers:
+  - App orchestration and state helpers:
   - Device descriptor resolution, fallback device picking, and device list refresh.
   - Clipboard paste flow, work-log append behavior, and tray status updates.
   - Keyboard and mouse hotkey press/release transitions, double-tap work-log handling, and toggle mode stop behavior.
@@ -65,6 +65,7 @@ CI now runs:
   - Always-on SQLite transcript storage, raw-before-GPT ordering, finalization and failure status, search, deletion, HTML escaping, loopback browser requests, deletion-token validation, and browser shutdown.
   - Single-instance startup guard, hotkey-listener watchdog restart, and delayed restart helper behavior.
   - Shared session lifecycle cleanup for pending starts, aborted capture, normal completion, and ordered transcript delivery.
+  - Recorder shutdown failure recovery, abandoned output-slot advancement, bounded output waits, and late-result rejection.
 
 - `test_apply_punctuation_options_normalize_capitalize_terminal`
   - Input: `"  hello   world  "`

@@ -406,6 +406,47 @@ def test_output_turn_waits_for_earlier_sessions():
     assert ordered_sessions == [1, 2]
 
 
+def test_abandoned_output_turn_does_not_block_later_session():
+    app.abandon_output_turn(2)
+
+    assert app.wait_for_output_turn(1) is True
+    app.advance_output_turn()
+
+    assert app.state.next_output_session_id == 3
+    assert app.wait_for_output_turn(2) is False
+    assert app.wait_for_output_turn(3) is True
+
+
+def test_output_turn_timeout_skips_stalled_session(monkeypatch):
+    monkeypatch.setattr(app, "OUTPUT_TURN_WAIT_TIMEOUT_S", 0.01)
+
+    assert app.wait_for_output_turn(2) is True
+    assert app.state.next_output_session_id == 2
+
+
+def test_stop_capture_session_recovers_state_when_recorder_stop_fails(monkeypatch):
+    class FailingRecorder:
+        def stop(self):
+            raise RuntimeError("device disappeared")
+
+    logs = []
+    monkeypatch.setattr(app, "log", lambda *args: logs.append(" ".join(map(str, args))))
+    monkeypatch.setattr(app, "maybe_beep", lambda _pattern: None)
+    monkeypatch.setattr(app, "update_tray_status", lambda _reason: None)
+    with app.state.lock:
+        app.state.active_session_id = 4
+        app.state.is_listening = True
+        app.state.active_start_requested_at = 1.0
+        app.state.active_stream_ready_at = 2.0
+        app.state.active_first_audio_at = 3.0
+
+    timestamps = app.stop_capture_session(FailingRecorder(), 4)
+
+    assert timestamps == app.CaptureTimestamps(1.0, 2.0, 3.0)
+    assert app.state.is_listening is False
+    assert any("Recorder shutdown failed" in line for line in logs)
+
+
 def test_post_processing_state_is_reference_counted(monkeypatch):
     status_updates = []
     monkeypatch.setattr(app, "update_tray_status", status_updates.append)
