@@ -9,9 +9,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import ClassVar
 
+from PIL import Image, ImageChops, ImageDraw
+
 INDICATOR_SIZE = 76
 INDICATOR_TARGET_FPS = 120
-TRANSPARENT_RGB = (1, 2, 3)
+INDICATOR_IDLE_POLL_FPS = 30
+INDICATOR_SUPERSAMPLE_SCALE = 4
+TRACK_WIDTH = 1.25
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,54 @@ def muted_color_hex(color: tuple[int, int, int, int]) -> str:
     return color_hex(muted_color(color))
 
 
+def render_indicator_image(
+    frame: IndicatorFrame,
+    color: tuple[int, int, int, int],
+    *,
+    size: int = INDICATOR_SIZE,
+    scale: int = INDICATOR_SUPERSAMPLE_SCALE,
+) -> Image.Image:
+    render_size = size * scale
+    center = render_size / 2
+    radius = frame.radius * scale
+    bounds = (
+        round(center - radius),
+        round(center - radius),
+        round(center + radius),
+        round(center + radius),
+    )
+    image = Image.new("RGBA", (render_size, render_size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    track_rgb = muted_color(color)[:3]
+    draw.ellipse(
+        bounds,
+        outline=(*track_rgb, 178),
+        width=max(1, round(TRACK_WIDTH * scale)),
+    )
+    draw.arc(
+        bounds,
+        start=frame.arc_start,
+        end=frame.arc_start + frame.arc_extent,
+        fill=color,
+        width=max(1, round(frame.arc_width * scale)),
+    )
+    return image.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def premultiplied_bgra_bytes(image: Image.Image) -> bytes:
+    red, green, blue, alpha = image.convert("RGBA").split()
+    premultiplied = Image.merge(
+        "RGBA",
+        (
+            ImageChops.multiply(red, alpha),
+            ImageChops.multiply(green, alpha),
+            ImageChops.multiply(blue, alpha),
+            alpha,
+        ),
+    )
+    return premultiplied.tobytes("raw", "BGRA")
+
+
 class CursorActivityIndicator:
     def __init__(
         self,
@@ -71,7 +123,7 @@ class CursorActivityIndicator:
         self.stop_event.clear()
         self.thread = threading.Thread(
             target=self._run,
-            name="cursor-recording-indicator",
+            name="cursor-activity-indicator",
             daemon=True,
         )
         self.thread.start()
@@ -130,14 +182,41 @@ class CursorActivityIndicator:
                 ("lpszClassName", wintypes.LPCWSTR),
             ]
 
-        class PaintStruct(ctypes.Structure):
+        class BitmapInfoHeader(ctypes.Structure):
             _fields_: ClassVar[list[tuple[str, object]]] = [
-                ("hdc", wintypes.HDC),
-                ("fErase", wintypes.BOOL),
-                ("rcPaint", wintypes.RECT),
-                ("fRestore", wintypes.BOOL),
-                ("fIncUpdate", wintypes.BOOL),
-                ("rgbReserved", ctypes.c_byte * 32),
+                ("biSize", wintypes.DWORD),
+                ("biWidth", wintypes.LONG),
+                ("biHeight", wintypes.LONG),
+                ("biPlanes", wintypes.WORD),
+                ("biBitCount", wintypes.WORD),
+                ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD),
+                ("biXPelsPerMeter", wintypes.LONG),
+                ("biYPelsPerMeter", wintypes.LONG),
+                ("biClrUsed", wintypes.DWORD),
+                ("biClrImportant", wintypes.DWORD),
+            ]
+
+        class RgbQuad(ctypes.Structure):
+            _fields_: ClassVar[list[tuple[str, object]]] = [
+                ("rgbBlue", wintypes.BYTE),
+                ("rgbGreen", wintypes.BYTE),
+                ("rgbRed", wintypes.BYTE),
+                ("rgbReserved", wintypes.BYTE),
+            ]
+
+        class BitmapInfo(ctypes.Structure):
+            _fields_: ClassVar[list[tuple[str, object]]] = [
+                ("bmiHeader", BitmapInfoHeader),
+                ("bmiColors", RgbQuad * 1),
+            ]
+
+        class BlendFunction(ctypes.Structure):
+            _fields_: ClassVar[list[tuple[str, object]]] = [
+                ("BlendOp", wintypes.BYTE),
+                ("BlendFlags", wintypes.BYTE),
+                ("SourceConstantAlpha", wintypes.BYTE),
+                ("AlphaFormat", wintypes.BYTE),
             ]
 
         kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
@@ -168,8 +247,6 @@ class CursorActivityIndicator:
             wintypes.LPARAM,
         ]
         user32.DefWindowProcW.restype = ctypes.c_ssize_t
-        user32.BeginPaint.argtypes = [wintypes.HWND, ctypes.POINTER(PaintStruct)]
-        user32.BeginPaint.restype = wintypes.HDC
         user32.PeekMessageW.argtypes = [
             ctypes.POINTER(wintypes.MSG),
             wintypes.HWND,
@@ -185,159 +262,49 @@ class CursorActivityIndicator:
             wintypes.LPARAM,
         ]
         user32.PostMessageW.restype = wintypes.BOOL
-        user32.SetLayeredWindowAttributes.argtypes = [
-            wintypes.HWND,
-            wintypes.COLORREF,
-            wintypes.BYTE,
-            wintypes.DWORD,
-        ]
-        user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
         user32.DestroyWindow.argtypes = [wintypes.HWND]
         user32.DestroyWindow.restype = wintypes.BOOL
+        user32.IsWindow.argtypes = [wintypes.HWND]
+        user32.IsWindow.restype = wintypes.BOOL
         user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
         user32.ShowWindow.restype = wintypes.BOOL
-        user32.InvalidateRect.argtypes = [
-            wintypes.HWND,
-            ctypes.POINTER(wintypes.RECT),
-            wintypes.BOOL,
-        ]
-        user32.InvalidateRect.restype = wintypes.BOOL
-        user32.UpdateWindow.argtypes = [wintypes.HWND]
-        user32.UpdateWindow.restype = wintypes.BOOL
         user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
         user32.TranslateMessage.restype = wintypes.BOOL
         user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
         user32.DispatchMessageW.restype = ctypes.c_ssize_t
-        user32.SetWindowPos.argtypes = [
-            wintypes.HWND,
-            wintypes.HWND,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            wintypes.UINT,
-        ]
-        user32.SetWindowPos.restype = wintypes.BOOL
         user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
         user32.GetCursorPos.restype = wintypes.BOOL
-        user32.FillRect.argtypes = [
+        user32.UpdateLayeredWindow.argtypes = [
+            wintypes.HWND,
             wintypes.HDC,
-            ctypes.POINTER(wintypes.RECT),
-            wintypes.HBRUSH,
+            ctypes.POINTER(wintypes.POINT),
+            ctypes.POINTER(wintypes.SIZE),
+            wintypes.HDC,
+            ctypes.POINTER(wintypes.POINT),
+            wintypes.COLORREF,
+            ctypes.POINTER(BlendFunction),
+            wintypes.DWORD,
         ]
-        user32.FillRect.restype = ctypes.c_int
-        user32.EndPaint.argtypes = [wintypes.HWND, ctypes.POINTER(PaintStruct)]
-        user32.EndPaint.restype = wintypes.BOOL
-        gdi32.CreateSolidBrush.argtypes = [wintypes.COLORREF]
-        gdi32.CreateSolidBrush.restype = wintypes.HBRUSH
-        gdi32.CreatePen.argtypes = [ctypes.c_int, ctypes.c_int, wintypes.COLORREF]
-        gdi32.CreatePen.restype = wintypes.HANDLE
-        gdi32.GetStockObject.argtypes = [ctypes.c_int]
-        gdi32.GetStockObject.restype = wintypes.HANDLE
-        gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HANDLE]
-        gdi32.SelectObject.restype = wintypes.HANDLE
-        gdi32.DeleteObject.argtypes = [wintypes.HANDLE]
+        user32.UpdateLayeredWindow.restype = wintypes.BOOL
+        gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+        gdi32.CreateCompatibleDC.restype = wintypes.HDC
+        gdi32.CreateDIBSection.argtypes = [
+            wintypes.HDC,
+            ctypes.POINTER(BitmapInfo),
+            wintypes.UINT,
+            ctypes.POINTER(ctypes.c_void_p),
+            wintypes.HANDLE,
+            wintypes.DWORD,
+        ]
+        gdi32.CreateDIBSection.restype = wintypes.HBITMAP
+        gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+        gdi32.SelectObject.restype = wintypes.HGDIOBJ
+        gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
         gdi32.DeleteObject.restype = wintypes.BOOL
-        gdi32.Ellipse.argtypes = [
-            wintypes.HDC,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-        ]
-        gdi32.Ellipse.restype = wintypes.BOOL
-        gdi32.Arc.argtypes = [
-            wintypes.HDC,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-        ]
-        gdi32.Arc.restype = wintypes.BOOL
-
-        def color_ref(color: tuple[int, ...]) -> int:
-            return color[0] | (color[1] << 8) | (color[2] << 16)
-
-        started_at = time.monotonic()
-        current_snapshot = CursorIndicatorSnapshot(False, (0, 0, 0, 255))
-
-        def paint(hwnd: int) -> None:
-            paint_struct = PaintStruct()
-            hdc = user32.BeginPaint(hwnd, ctypes.byref(paint_struct))
-            rect = wintypes.RECT(0, 0, INDICATOR_SIZE, INDICATOR_SIZE)
-            background = gdi32.CreateSolidBrush(color_ref(TRANSPARENT_RGB))
-            user32.FillRect(hdc, ctypes.byref(rect), background)
-            gdi32.DeleteObject(background)
-
-            snapshot = current_snapshot
-            color = snapshot.color
-            frame = indicator_frame(
-                time.monotonic() - started_at,
-                snapshot.motion_speed,
-            )
-            center = INDICATOR_SIZE // 2
-            radius = round(frame.radius)
-            bounds = (
-                center - radius,
-                center - radius,
-                center + radius,
-                center + radius,
-            )
-            null_brush = gdi32.GetStockObject(5)  # NULL_BRUSH
-            previous_brush = gdi32.SelectObject(hdc, null_brush)
-
-            track_pen = gdi32.CreatePen(0, 1, color_ref(muted_color(color)))
-            previous_pen = gdi32.SelectObject(hdc, track_pen)
-            gdi32.Ellipse(hdc, *bounds)
-            gdi32.SelectObject(hdc, previous_pen)
-            gdi32.DeleteObject(track_pen)
-
-            arc_pen = gdi32.CreatePen(0, max(2, round(frame.arc_width)), color_ref(color))
-            previous_pen = gdi32.SelectObject(hdc, arc_pen)
-            start_angle = math.radians(frame.arc_start)
-            end_angle = math.radians(frame.arc_start + frame.arc_extent)
-            start_x = round(center + radius * math.cos(start_angle))
-            start_y = round(center - radius * math.sin(start_angle))
-            end_x = round(center + radius * math.cos(end_angle))
-            end_y = round(center - radius * math.sin(end_angle))
-            gdi32.Arc(hdc, *bounds, start_x, start_y, end_x, end_y)
-            gdi32.SelectObject(hdc, previous_pen)
-            gdi32.SelectObject(hdc, previous_brush)
-            gdi32.DeleteObject(arc_pen)
-            user32.EndPaint(hwnd, ctypes.byref(paint_struct))
-
-        def update_frame(hwnd: int) -> None:
-            nonlocal current_snapshot
-            snapshot = self.snapshot_provider()
-            current_snapshot = snapshot
-            if snapshot.visible:
-                point = wintypes.POINT()
-                user32.GetCursorPos(ctypes.byref(point))
-                offset = INDICATOR_SIZE // 2
-                user32.SetWindowPos(
-                    hwnd,
-                    ctypes.c_void_p(-1),  # HWND_TOPMOST
-                    point.x - offset,
-                    point.y - offset,
-                    INDICATOR_SIZE,
-                    INDICATOR_SIZE,
-                    0x0010 | 0x0040,  # SWP_NOACTIVATE | SWP_SHOWWINDOW
-                )
-                user32.InvalidateRect(hwnd, None, False)
-                user32.UpdateWindow(hwnd)
-            else:
-                user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        gdi32.DeleteDC.argtypes = [wintypes.HDC]
+        gdi32.DeleteDC.restype = wintypes.BOOL
 
         def wndproc(hwnd, message, wparam, lparam):
-            if message == 0x000F:  # WM_PAINT
-                paint(hwnd)
-                return 0
-            if message == 0x0014:  # WM_ERASEBKGND
-                return 1
             if message == 0x0010:  # WM_CLOSE
                 user32.DestroyWindow(hwnd)
                 return 0
@@ -383,16 +350,94 @@ class CursorActivityIndicator:
             user32.UnregisterClassW(class_name, instance)
             raise ctypes.WinError()
         self.hwnd = hwnd
-        user32.SetLayeredWindowAttributes(hwnd, color_ref(TRANSPARENT_RGB), 0, 0x00000001)
+
+        memory_dc = gdi32.CreateCompatibleDC(None)
+        if not memory_dc:
+            user32.DestroyWindow(hwnd)
+            user32.UnregisterClassW(class_name, instance)
+            raise ctypes.WinError()
+        bitmap_info = BitmapInfo(
+            BitmapInfoHeader(
+                ctypes.sizeof(BitmapInfoHeader),
+                INDICATOR_SIZE,
+                -INDICATOR_SIZE,
+                1,
+                32,
+                0,
+                INDICATOR_SIZE * INDICATOR_SIZE * 4,
+                0,
+                0,
+                0,
+                0,
+            ),
+            (RgbQuad * 1)(),
+        )
+        pixel_buffer = ctypes.c_void_p()
+        bitmap = gdi32.CreateDIBSection(
+            memory_dc,
+            ctypes.byref(bitmap_info),
+            0,
+            ctypes.byref(pixel_buffer),
+            None,
+            0,
+        )
+        if not bitmap or not pixel_buffer.value:
+            gdi32.DeleteDC(memory_dc)
+            user32.DestroyWindow(hwnd)
+            user32.UnregisterClassW(class_name, instance)
+            raise ctypes.WinError()
+        previous_bitmap = gdi32.SelectObject(memory_dc, bitmap)
+
+        started_at = time.monotonic()
+        shown = False
+        source_point = wintypes.POINT(0, 0)
+        window_size = wintypes.SIZE(INDICATOR_SIZE, INDICATOR_SIZE)
+        blend = BlendFunction(0, 0, 255, 1)  # AC_SRC_OVER, AC_SRC_ALPHA
+
+        def update_frame() -> bool:
+            nonlocal shown
+            snapshot = self.snapshot_provider()
+            if not snapshot.visible:
+                if shown:
+                    user32.ShowWindow(hwnd, 0)  # SW_HIDE
+                    shown = False
+                return False
+            frame = indicator_frame(
+                time.monotonic() - started_at,
+                snapshot.motion_speed,
+            )
+            image = render_indicator_image(frame, snapshot.color)
+            pixels = premultiplied_bgra_bytes(image)
+            ctypes.memmove(pixel_buffer, pixels, len(pixels))
+            cursor = wintypes.POINT()
+            user32.GetCursorPos(ctypes.byref(cursor))
+            offset = INDICATOR_SIZE // 2
+            destination = wintypes.POINT(cursor.x - offset, cursor.y - offset)
+            if not user32.UpdateLayeredWindow(
+                hwnd,
+                None,
+                ctypes.byref(destination),
+                ctypes.byref(window_size),
+                memory_dc,
+                ctypes.byref(source_point),
+                0,
+                ctypes.byref(blend),
+                0x00000002,  # ULW_ALPHA
+            ):
+                raise ctypes.WinError()
+            if not shown:
+                user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+                shown = True
+            return True
+
         winmm = ctypes.windll.winmm
         winmm.timeBeginPeriod.argtypes = [wintypes.UINT]
         winmm.timeBeginPeriod.restype = wintypes.UINT
         winmm.timeEndPeriod.argtypes = [wintypes.UINT]
         winmm.timeEndPeriod.restype = wintypes.UINT
-        high_resolution_timer = winmm.timeBeginPeriod(1) == 0
+        high_resolution_timer = False
         try:
             message = wintypes.MSG()
-            frame_interval_s = 1.0 / INDICATOR_TARGET_FPS
             next_frame_at = time.perf_counter()
             running = True
             while running:
@@ -407,7 +452,15 @@ class CursorActivityIndicator:
                 if self.stop_event.is_set():
                     user32.DestroyWindow(hwnd)
                     continue
-                update_frame(hwnd)
+                active = update_frame()
+                if active and not high_resolution_timer:
+                    high_resolution_timer = winmm.timeBeginPeriod(1) == 0
+                elif not active and high_resolution_timer:
+                    winmm.timeEndPeriod(1)
+                    high_resolution_timer = False
+                frame_interval_s = 1.0 / (
+                    INDICATOR_TARGET_FPS if active else INDICATOR_IDLE_POLL_FPS
+                )
                 next_frame_at += frame_interval_s
                 sleep_s = next_frame_at - time.perf_counter()
                 if sleep_s > 0:
@@ -417,4 +470,9 @@ class CursorActivityIndicator:
         finally:
             if high_resolution_timer:
                 winmm.timeEndPeriod(1)
-        user32.UnregisterClassW(class_name, instance)
+            gdi32.SelectObject(memory_dc, previous_bitmap)
+            gdi32.DeleteObject(bitmap)
+            gdi32.DeleteDC(memory_dc)
+            if user32.IsWindow(hwnd):
+                user32.DestroyWindow(hwnd)
+            user32.UnregisterClassW(class_name, instance)
