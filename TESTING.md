@@ -321,10 +321,13 @@ For a new Python module, use `ruff check --fix <file>` before the final `ruff fo
 
 Do not create a Tk root on a worker thread for this overlay. The first live smoke test rendered correctly but emitted `Tcl_AsyncDelete` during interpreter cleanup. The maintained implementation uses a native Win32 window and message loop in its worker thread, which starts and shuts down without Tcl thread ownership.
 
+Do not use Win32 `SetTimer` for the high-refresh cursor animation. An 8 ms timer request measured only about 64 painted frames per second on this machine because USER timers were quantized. The paced native message loop with balanced `timeBeginPeriod(1)` / `timeEndPeriod(1)` calls measured 120.5 painted frames per second at the 120 Hz target.
+
 Threaded tray tests must isolate every worker started by `tray_setup` and stop it in fixture teardown. The watchdog extraction initially exposed one test that mocked the animation worker but not the new microphone worker; the faster repeatable pattern is to mock the worker start in setup tests and call its stop helper in the shared fixture.
 
 28) Windows cursor recording indicator
 - Hold the dictation trigger and move the pointer across multiple windows. Expected: a thin red ring tracks the pointer without stealing focus or blocking clicks.
 - Hold Shift before the dictation trigger. Expected: the ring is blue for the full latched system-audio capture, including after Shift is released.
-- Release the recording trigger. Expected: the ring disappears immediately; transcription continues normally without the overlay.
+- Release the recording trigger. Expected: the ring immediately becomes orange and rotates noticeably faster while transcription is active, then disappears when processing completes.
+- Watch the ring on a high-refresh display while recording. Expected: motion is fluid at the 120 Hz target without affecting pointer movement, capture, or transcription latency.
 - Set `CURSOR_RECORDING_INDICATOR=0` and restart. Expected: recording behavior is unchanged and no pointer ring appears.

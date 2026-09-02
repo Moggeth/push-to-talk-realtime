@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import math
 
-from cursor_indicator import color_hex, indicator_frame, muted_color_hex
+from cursor_indicator import (
+    INDICATOR_TARGET_FPS,
+    color_hex,
+    indicator_frame,
+    muted_color_hex,
+)
 
 
 def test_indicator_frame_rotates_and_gently_pulses():
@@ -14,6 +19,14 @@ def test_indicator_frame_rotates_and_gently_pulses():
     assert 23.5 <= later.radius <= 26.5
     assert 91.0 <= later.arc_extent <= 119.0
     assert math.isfinite(later.arc_width)
+
+
+def test_indicator_targets_high_refresh_and_faster_processing_motion():
+    normal = indicator_frame(0.1)
+    processing = indicator_frame(0.1, motion_speed=2.6)
+
+    assert INDICATOR_TARGET_FPS == 120
+    assert math.isclose(processing.arc_start - normal.arc_start, 30.4)
 
 
 def test_indicator_colors_preserve_source_identity():

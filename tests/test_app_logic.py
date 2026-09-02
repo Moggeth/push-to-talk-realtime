@@ -48,7 +48,7 @@ class FakeThread:
 
 @pytest.fixture(autouse=True)
 def reset_app_state(monkeypatch, tmp_path: Path):
-    app.stop_cursor_recording_indicator()
+    app.stop_cursor_activity_indicator()
     app.stop_warm_microphone_watchdog()
     app.warm_microphone_watchdog_thread = None
     app.warm_microphone_capture.stop()
@@ -70,7 +70,7 @@ def reset_app_state(monkeypatch, tmp_path: Path):
     FakeThread.created.clear()
     yield
     app.shutdown_event.set()
-    app.stop_cursor_recording_indicator()
+    app.stop_cursor_activity_indicator()
     app.stop_warm_microphone_watchdog()
     app.warm_microphone_watchdog_thread = None
     app.warm_microphone_capture.stop()
@@ -1356,12 +1356,12 @@ def test_update_tray_tooltip_identifies_system_audio_source():
     )
 
 
-def test_cursor_recording_snapshot_uses_latched_audio_source_color():
+def test_cursor_indicator_snapshot_uses_latched_audio_source_color():
     with app.state.lock:
         app.state.is_listening = True
         app.state.active_audio_source = app.AUDIO_SOURCE_SYSTEM
 
-    assert app.cursor_recording_snapshot() == (
+    assert app.cursor_indicator_snapshot() == app.CursorIndicatorSnapshot(
         True,
         app.TRAY_COLOR_SYSTEM_AUDIO_LISTENING,
     )
@@ -1369,7 +1369,22 @@ def test_cursor_recording_snapshot_uses_latched_audio_source_color():
     with app.state.lock:
         app.state.active_audio_source = app.AUDIO_SOURCE_MICROPHONE
 
-    assert app.cursor_recording_snapshot() == (True, app.TRAY_COLOR_LISTENING)
+    assert app.cursor_indicator_snapshot() == app.CursorIndicatorSnapshot(
+        True,
+        app.TRAY_COLOR_LISTENING,
+    )
+
+
+def test_cursor_indicator_snapshot_uses_fast_orange_transcribing_state():
+    with app.state.lock:
+        app.state.is_listening = False
+        app.state.is_transcribing = True
+
+    assert app.cursor_indicator_snapshot() == app.CursorIndicatorSnapshot(
+        True,
+        app.TRAY_COLOR_TRANSCRIBING,
+        motion_speed=2.6,
+    )
 
 
 def test_update_tray_tooltip_identifies_gpt_post_processing():
@@ -2200,7 +2215,7 @@ def test_tray_setup_marks_icon_visible_and_starts_listener(monkeypatch):
     )
     monkeypatch.setattr(
         app,
-        "start_cursor_recording_indicator",
+        "start_cursor_activity_indicator",
         lambda: start_calls.append("cursor-indicator"),
     )
 
@@ -2231,7 +2246,7 @@ def test_tray_exit_stops_listener_hides_icon_and_sets_shutdown(monkeypatch):
     monkeypatch.setattr(app, "stop_transcript_browser", lambda: stop_calls.append("browser"))
     monkeypatch.setattr(
         app,
-        "stop_cursor_recording_indicator",
+        "stop_cursor_activity_indicator",
         lambda: stop_calls.append("cursor-indicator"),
     )
 

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 INDICATOR_SIZE = 76
-INDICATOR_INTERVAL_MS = 32
+INDICATOR_TARGET_FPS = 120
 TRANSPARENT_RGB = (1, 2, 3)
 
 
@@ -22,11 +22,18 @@ class IndicatorFrame:
     arc_width: float
 
 
-def indicator_frame(elapsed_s: float) -> IndicatorFrame:
+@dataclass(frozen=True)
+class CursorIndicatorSnapshot:
+    visible: bool
+    color: tuple[int, int, int, int]
+    motion_speed: float = 1.0
+
+
+def indicator_frame(elapsed_s: float, motion_speed: float = 1.0) -> IndicatorFrame:
     pulse = math.sin(elapsed_s * math.tau * 0.8)
     return IndicatorFrame(
         radius=25.0 + pulse * 1.5,
-        arc_start=(elapsed_s * 190.0 - 90.0) % 360.0,
+        arc_start=(elapsed_s * 190.0 * motion_speed - 90.0) % 360.0,
         arc_extent=105.0 + math.sin(elapsed_s * math.tau * 0.55) * 14.0,
         arc_width=2.6 + (pulse + 1.0) * 0.35,
     )
@@ -44,10 +51,10 @@ def muted_color_hex(color: tuple[int, int, int, int]) -> str:
     return color_hex(muted_color(color))
 
 
-class CursorRecordingIndicator:
+class CursorActivityIndicator:
     def __init__(
         self,
-        snapshot_provider: Callable[[], tuple[bool, tuple[int, int, int, int]]],
+        snapshot_provider: Callable[[], CursorIndicatorSnapshot],
         log: Callable[..., None],
     ) -> None:
         self.snapshot_provider = snapshot_provider
@@ -163,13 +170,14 @@ class CursorRecordingIndicator:
         user32.DefWindowProcW.restype = ctypes.c_ssize_t
         user32.BeginPaint.argtypes = [wintypes.HWND, ctypes.POINTER(PaintStruct)]
         user32.BeginPaint.restype = wintypes.HDC
-        user32.GetMessageW.argtypes = [
+        user32.PeekMessageW.argtypes = [
             ctypes.POINTER(wintypes.MSG),
             wintypes.HWND,
             wintypes.UINT,
             wintypes.UINT,
+            wintypes.UINT,
         ]
-        user32.GetMessageW.restype = wintypes.BOOL
+        user32.PeekMessageW.restype = wintypes.BOOL
         user32.PostMessageW.argtypes = [
             wintypes.HWND,
             wintypes.UINT,
@@ -184,13 +192,6 @@ class CursorRecordingIndicator:
             wintypes.DWORD,
         ]
         user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
-        user32.SetTimer.argtypes = [
-            wintypes.HWND,
-            ctypes.c_size_t,
-            wintypes.UINT,
-            wintypes.LPVOID,
-        ]
-        user32.SetTimer.restype = ctypes.c_size_t
         user32.DestroyWindow.argtypes = [wintypes.HWND]
         user32.DestroyWindow.restype = wintypes.BOOL
         user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
@@ -201,6 +202,8 @@ class CursorRecordingIndicator:
             wintypes.BOOL,
         ]
         user32.InvalidateRect.restype = wintypes.BOOL
+        user32.UpdateWindow.argtypes = [wintypes.HWND]
+        user32.UpdateWindow.restype = wintypes.BOOL
         user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
         user32.TranslateMessage.restype = wintypes.BOOL
         user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
@@ -260,6 +263,7 @@ class CursorRecordingIndicator:
             return color[0] | (color[1] << 8) | (color[2] << 16)
 
         started_at = time.monotonic()
+        current_snapshot = CursorIndicatorSnapshot(False, (0, 0, 0, 255))
 
         def paint(hwnd: int) -> None:
             paint_struct = PaintStruct()
@@ -269,8 +273,12 @@ class CursorRecordingIndicator:
             user32.FillRect(hdc, ctypes.byref(rect), background)
             gdi32.DeleteObject(background)
 
-            _, color = self.snapshot_provider()
-            frame = indicator_frame(time.monotonic() - started_at)
+            snapshot = current_snapshot
+            color = snapshot.color
+            frame = indicator_frame(
+                time.monotonic() - started_at,
+                snapshot.motion_speed,
+            )
             center = INDICATOR_SIZE // 2
             radius = round(frame.radius)
             bounds = (
@@ -302,29 +310,29 @@ class CursorRecordingIndicator:
             gdi32.DeleteObject(arc_pen)
             user32.EndPaint(hwnd, ctypes.byref(paint_struct))
 
+        def update_frame(hwnd: int) -> None:
+            nonlocal current_snapshot
+            snapshot = self.snapshot_provider()
+            current_snapshot = snapshot
+            if snapshot.visible:
+                point = wintypes.POINT()
+                user32.GetCursorPos(ctypes.byref(point))
+                offset = INDICATOR_SIZE // 2
+                user32.SetWindowPos(
+                    hwnd,
+                    ctypes.c_void_p(-1),  # HWND_TOPMOST
+                    point.x - offset,
+                    point.y - offset,
+                    INDICATOR_SIZE,
+                    INDICATOR_SIZE,
+                    0x0010 | 0x0040,  # SWP_NOACTIVATE | SWP_SHOWWINDOW
+                )
+                user32.InvalidateRect(hwnd, None, False)
+                user32.UpdateWindow(hwnd)
+            else:
+                user32.ShowWindow(hwnd, 0)  # SW_HIDE
+
         def wndproc(hwnd, message, wparam, lparam):
-            if message == 0x0113:  # WM_TIMER
-                if self.stop_event.is_set():
-                    user32.DestroyWindow(hwnd)
-                    return 0
-                active, _ = self.snapshot_provider()
-                if active:
-                    point = wintypes.POINT()
-                    user32.GetCursorPos(ctypes.byref(point))
-                    offset = INDICATOR_SIZE // 2
-                    user32.SetWindowPos(
-                        hwnd,
-                        ctypes.c_void_p(-1),  # HWND_TOPMOST
-                        point.x - offset,
-                        point.y - offset,
-                        INDICATOR_SIZE,
-                        INDICATOR_SIZE,
-                        0x0010 | 0x0040,  # SWP_NOACTIVATE | SWP_SHOWWINDOW
-                    )
-                    user32.InvalidateRect(hwnd, None, False)
-                else:
-                    user32.ShowWindow(hwnd, 0)  # SW_HIDE
-                return 0
             if message == 0x000F:  # WM_PAINT
                 paint(hwnd)
                 return 0
@@ -376,9 +384,37 @@ class CursorRecordingIndicator:
             raise ctypes.WinError()
         self.hwnd = hwnd
         user32.SetLayeredWindowAttributes(hwnd, color_ref(TRANSPARENT_RGB), 0, 0x00000001)
-        user32.SetTimer(hwnd, 1, INDICATOR_INTERVAL_MS, None)
-        message = wintypes.MSG()
-        while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
-            user32.TranslateMessage(ctypes.byref(message))
-            user32.DispatchMessageW(ctypes.byref(message))
+        winmm = ctypes.windll.winmm
+        winmm.timeBeginPeriod.argtypes = [wintypes.UINT]
+        winmm.timeBeginPeriod.restype = wintypes.UINT
+        winmm.timeEndPeriod.argtypes = [wintypes.UINT]
+        winmm.timeEndPeriod.restype = wintypes.UINT
+        high_resolution_timer = winmm.timeBeginPeriod(1) == 0
+        try:
+            message = wintypes.MSG()
+            frame_interval_s = 1.0 / INDICATOR_TARGET_FPS
+            next_frame_at = time.perf_counter()
+            running = True
+            while running:
+                while user32.PeekMessageW(ctypes.byref(message), None, 0, 0, 0x0001):  # PM_REMOVE
+                    if message.message == 0x0012:  # WM_QUIT
+                        running = False
+                        break
+                    user32.TranslateMessage(ctypes.byref(message))
+                    user32.DispatchMessageW(ctypes.byref(message))
+                if not running:
+                    break
+                if self.stop_event.is_set():
+                    user32.DestroyWindow(hwnd)
+                    continue
+                update_frame(hwnd)
+                next_frame_at += frame_interval_s
+                sleep_s = next_frame_at - time.perf_counter()
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
+                else:
+                    next_frame_at = time.perf_counter()
+        finally:
+            if high_resolution_timer:
+                winmm.timeEndPeriod(1)
         user32.UnregisterClassW(class_name, instance)
