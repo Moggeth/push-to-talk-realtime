@@ -16,6 +16,11 @@ INDICATOR_TARGET_FPS = 120
 INDICATOR_IDLE_POLL_FPS = 30
 INDICATOR_SUPERSAMPLE_SCALE = 4
 TRACK_WIDTH = 1.25
+INTRO_DURATION_S = 0.16
+OUTRO_DURATION_S = 0.2
+COLOR_RESPONSE_S = 0.025
+SPEED_RESPONSE_S = 0.08
+BASE_ROTATION_DEG_S = 190.0
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,14 @@ class CursorIndicatorSnapshot:
     visible: bool
     color: tuple[int, int, int, int]
     motion_speed: float = 1.0
+
+
+@dataclass(frozen=True)
+class IndicatorVisual:
+    visible: bool
+    frame: IndicatorFrame
+    color: tuple[int, int, int, int]
+    opacity: float
 
 
 def indicator_frame(elapsed_s: float, motion_speed: float = 1.0) -> IndicatorFrame:
@@ -55,12 +68,104 @@ def muted_color_hex(color: tuple[int, int, int, int]) -> str:
     return color_hex(muted_color(color))
 
 
+def blend_color(
+    start: tuple[int, int, int, int],
+    end: tuple[int, int, int, int],
+    amount: float,
+) -> tuple[int, int, int, int]:
+    progress = min(1.0, max(0.0, amount))
+    return tuple(
+        round(first + (second - first) * progress) for first, second in zip(start, end, strict=True)
+    )
+
+
+class IndicatorAnimator:
+    def __init__(self) -> None:
+        self.last_at: float | None = None
+        self.cycle_started_at = 0.0
+        self.intro_started_at = 0.0
+        self.outro_started_at = 0.0
+        self.phase = -90.0
+        self.current_color = (0, 0, 0, 0)
+        self.current_speed = 1.0
+        self.last_snapshot: CursorIndicatorSnapshot | None = None
+        self.present = False
+        self.target_visible = False
+
+    def update(self, snapshot: CursorIndicatorSnapshot, now: float) -> IndicatorVisual:
+        previous_at = self.last_at
+        self.last_at = now
+        delta_s = 0.0 if previous_at is None else min(0.1, max(0.0, now - previous_at))
+
+        if snapshot.visible:
+            if not self.present:
+                self.present = True
+                self.phase = -90.0
+                self.cycle_started_at = now
+                self.intro_started_at = now
+                self.current_color = snapshot.color
+                self.current_speed = snapshot.motion_speed
+            self.target_visible = True
+            self.last_snapshot = snapshot
+        elif self.target_visible:
+            self.target_visible = False
+            self.outro_started_at = now
+
+        effective_snapshot = snapshot if snapshot.visible else self.last_snapshot
+        if not self.present or effective_snapshot is None:
+            return self._hidden_visual()
+
+        color_progress = 1.0 - math.exp(-delta_s / COLOR_RESPONSE_S)
+        speed_progress = 1.0 - math.exp(-delta_s / SPEED_RESPONSE_S)
+        self.current_color = blend_color(
+            self.current_color,
+            effective_snapshot.color,
+            color_progress,
+        )
+        self.current_speed += (
+            effective_snapshot.motion_speed - self.current_speed
+        ) * speed_progress
+        self.phase = (self.phase + delta_s * BASE_ROTATION_DEG_S * self.current_speed) % 360.0
+
+        if self.target_visible:
+            progress = min(1.0, max(0.0, (now - self.intro_started_at) / INTRO_DURATION_S))
+            eased = 1.0 - (1.0 - progress) ** 3
+            geometry_scale = 0.08 + 0.92 * eased
+            opacity = eased
+        else:
+            progress = min(1.0, max(0.0, (now - self.outro_started_at) / OUTRO_DURATION_S))
+            if progress >= 1.0:
+                self.present = False
+                self.last_snapshot = None
+                return self._hidden_visual()
+            geometry_scale = 1.0 - progress**3
+            opacity = 1.0 - progress
+
+        base_frame = indicator_frame(now - self.cycle_started_at)
+        frame = IndicatorFrame(
+            radius=base_frame.radius * geometry_scale,
+            arc_start=self.phase,
+            arc_extent=base_frame.arc_extent,
+            arc_width=base_frame.arc_width * (0.55 + 0.45 * geometry_scale),
+        )
+        return IndicatorVisual(True, frame, self.current_color, opacity)
+
+    def _hidden_visual(self) -> IndicatorVisual:
+        return IndicatorVisual(
+            False,
+            IndicatorFrame(0.0, self.phase, 0.0, 0.0),
+            self.current_color,
+            0.0,
+        )
+
+
 def render_indicator_image(
     frame: IndicatorFrame,
     color: tuple[int, int, int, int],
     *,
     size: int = INDICATOR_SIZE,
     scale: int = INDICATOR_SUPERSAMPLE_SCALE,
+    opacity: float = 1.0,
 ) -> Image.Image:
     render_size = size * scale
     center = render_size / 2
@@ -73,17 +178,18 @@ def render_indicator_image(
     )
     image = Image.new("RGBA", (render_size, render_size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
+    alpha_scale = min(1.0, max(0.0, opacity))
     track_rgb = muted_color(color)[:3]
     draw.ellipse(
         bounds,
-        outline=(*track_rgb, 178),
+        outline=(*track_rgb, round(178 * alpha_scale)),
         width=max(1, round(TRACK_WIDTH * scale)),
     )
     draw.arc(
         bounds,
         start=frame.arc_start,
         end=frame.arc_start + frame.arc_extent,
-        fill=color,
+        fill=(*color[:3], round(color[3] * alpha_scale)),
         width=max(1, round(frame.arc_width * scale)),
     )
     return image.resize((size, size), Image.Resampling.LANCZOS)
@@ -388,7 +494,7 @@ class CursorActivityIndicator:
             raise ctypes.WinError()
         previous_bitmap = gdi32.SelectObject(memory_dc, bitmap)
 
-        started_at = time.monotonic()
+        animator = IndicatorAnimator()
         shown = False
         source_point = wintypes.POINT(0, 0)
         window_size = wintypes.SIZE(INDICATOR_SIZE, INDICATOR_SIZE)
@@ -397,16 +503,17 @@ class CursorActivityIndicator:
         def update_frame() -> bool:
             nonlocal shown
             snapshot = self.snapshot_provider()
-            if not snapshot.visible:
+            visual = animator.update(snapshot, time.monotonic())
+            if not visual.visible:
                 if shown:
                     user32.ShowWindow(hwnd, 0)  # SW_HIDE
                     shown = False
                 return False
-            frame = indicator_frame(
-                time.monotonic() - started_at,
-                snapshot.motion_speed,
+            image = render_indicator_image(
+                visual.frame,
+                visual.color,
+                opacity=visual.opacity,
             )
-            image = render_indicator_image(frame, snapshot.color)
             pixels = premultiplied_bgra_bytes(image)
             ctypes.memmove(pixel_buffer, pixels, len(pixels))
             cursor = wintypes.POINT()

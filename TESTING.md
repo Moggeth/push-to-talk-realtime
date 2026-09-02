@@ -325,12 +325,16 @@ Do not use Win32 `SetTimer` for the high-refresh cursor animation. An 8 ms timer
 
 The cursor overlay uses a 32-bit top-down DIB and `UpdateLayeredWindow` with premultiplied alpha. Render the artwork at 4x resolution and downsample with Lanczos; returning to GDI pens or color-key transparency restores visibly aliased one-bit edges. The supersampled alpha path retained a measured 120.0 frames per second on this machine.
 
+Cursor activity transitions share one stateful phase accumulator. Recording-to-transcription changes must update color and speed targets without constructing a new animation or recomputing the angle from a new speed multiplier; either approach visibly teleports the traveler. Only a fully completed lifecycle resets the starting phase.
+
 Threaded tray tests must isolate every worker started by `tray_setup` and stop it in fixture teardown. The watchdog extraction initially exposed one test that mocked the animation worker but not the new microphone worker; the faster repeatable pattern is to mock the worker start in setup tests and call its stop helper in the shared fixture.
 
 28) Windows cursor recording indicator
 - Hold the dictation trigger and move the pointer across multiple windows. Expected: a thin red ring tracks the pointer without stealing focus or blocking clicks.
+- Watch the first 160 ms after pressing the trigger. Expected: the ring expands smoothly from the cursor point instead of appearing at full size.
 - Hold Shift before the dictation trigger. Expected: the ring is blue for the full latched system-audio capture, including after Shift is released.
-- Release the recording trigger. Expected: the ring immediately becomes orange and rotates noticeably faster while transcription is active, then disappears when processing completes.
+- Release the recording trigger. Expected: the traveler keeps its current angular position while the ring eases into orange and accelerates; it must not restart from a fixed position.
+- Watch completion. Expected: the still-moving orange ring contracts into the cursor over about 200 ms instead of disappearing abruptly.
 - Watch the ring on a high-refresh display while recording. Expected: motion is fluid at the 120 Hz target without affecting pointer movement, capture, or transcription latency.
 - Inspect the thin circular track against both light and dark windows. Expected: curved edges are smoothly alpha-blended with no dark halo, square background, or visibly stair-stepped pixels.
 - Set `CURSOR_RECORDING_INDICATOR=0` and restart. Expected: recording behavior is unchanged and no pointer ring appears.
