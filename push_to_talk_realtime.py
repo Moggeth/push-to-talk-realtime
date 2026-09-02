@@ -38,6 +38,7 @@ from dotenv import load_dotenv
 from pynput import keyboard as pynput_keyboard
 
 import desktop_bootstrap  # noqa: F401
+from cursor_indicator import CursorRecordingIndicator
 from history_store import append_history_entry as append_history_entry_core
 from platform_input import (
     PasteTarget,
@@ -230,6 +231,9 @@ WARM_MICROPHONE_STALE_AFTER_S = max(
 WARM_MICROPHONE_HEALTH_CHECK_INTERVAL_S = 1.0
 WARM_MICROPHONE_RETRY_MAX_S = 30.0
 REALTIME_AUDIO_QUEUE_MAX_CHUNKS = max(32, int(os.getenv("REALTIME_AUDIO_QUEUE_MAX_CHUNKS", "512")))
+CURSOR_RECORDING_INDICATOR_ENABLED = os.getenv(
+    "CURSOR_RECORDING_INDICATOR", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
 
 # Behavior
 MODE_DICTATION = "dictation"
@@ -472,6 +476,7 @@ input_listener_watchdog_stop = threading.Event()
 INPUT_LISTENER_BOOT_REBIND_DELAYS_S = (8.0, 30.0, 90.0)
 tray_icon: TrayIconLike | None = None
 tray_animation_thread: threading.Thread | None = None
+cursor_recording_indicator: CursorRecordingIndicator | None = None
 warm_microphone_watchdog_thread: threading.Thread | None = None
 warm_microphone_watchdog_stop = threading.Event()
 tray_icon_key: tuple[tuple[int, int, int, int], int | None, str] | None = None
@@ -578,6 +583,35 @@ def log(*a):
                 log_file_failure_reported = True
                 sys.stderr.write(f"[Logging] Unable to write log file {LOG_PATH}: {exc}\n")
                 sys.stderr.flush()
+
+
+def cursor_recording_snapshot() -> tuple[bool, tuple[int, int, int, int]]:
+    with state.lock:
+        active = state.is_listening
+        audio_source = state.active_audio_source
+    color = (
+        TRAY_COLOR_SYSTEM_AUDIO_LISTENING
+        if audio_source == AUDIO_SOURCE_SYSTEM
+        else TRAY_COLOR_LISTENING
+    )
+    return active, color
+
+
+def start_cursor_recording_indicator() -> None:
+    global cursor_recording_indicator
+    if not CURSOR_RECORDING_INDICATOR_ENABLED or not IS_WINDOWS:
+        return
+    if cursor_recording_indicator is None:
+        cursor_recording_indicator = CursorRecordingIndicator(cursor_recording_snapshot, log)
+    cursor_recording_indicator.start()
+
+
+def stop_cursor_recording_indicator() -> None:
+    global cursor_recording_indicator
+    indicator = cursor_recording_indicator
+    cursor_recording_indicator = None
+    if indicator is not None:
+        indicator.stop()
 
 
 def log_unhandled_exception(
@@ -3903,6 +3937,7 @@ def tray_setup(_icon: TrayIconLike) -> None:
     global tray_status_signature
     _icon.visible = True  # required when using a custom setup callback
     start_warm_microphone_watchdog()
+    start_cursor_recording_indicator()
     reset_tray_visual_state()
     tray_status_signature = None
     enforce_transcription_engine_dependencies()
@@ -3929,6 +3964,7 @@ def tray_setup(_icon: TrayIconLike) -> None:
 def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
     global tray_status_signature
     shutdown_event.set()
+    stop_cursor_recording_indicator()
     stop_warm_microphone_watchdog()
     warm_microphone_capture.stop()
     stop_input_listeners()
@@ -3966,6 +4002,7 @@ def main() -> None:
         log("\nExiting...")
         tray_exit(tray_icon)
     finally:
+        stop_cursor_recording_indicator()
         stop_warm_microphone_watchdog()
         warm_microphone_capture.stop()
         stop_input_listeners()

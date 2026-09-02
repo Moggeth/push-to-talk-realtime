@@ -317,4 +317,14 @@ CI now runs:
 
 Development note: after structural Python edits, run `ruff format` on the changed files as the final step after the last patch, then run `ruff check` and `ruff format --check`. This avoids repeating the import-order and wrapping-only failures seen during the runtime-path and watchdog extractions; behavioral tests had already passed in the first case, and the second check stopped before tests.
 
+For a new Python module, use `ruff check --fix <file>` before the final `ruff format`; formatting alone does not organize imports. The cursor-indicator check initially stopped on that mechanical distinction before tests ran.
+
+Do not create a Tk root on a worker thread for this overlay. The first live smoke test rendered correctly but emitted `Tcl_AsyncDelete` during interpreter cleanup. The maintained implementation uses a native Win32 window and message loop in its worker thread, which starts and shuts down without Tcl thread ownership.
+
 Threaded tray tests must isolate every worker started by `tray_setup` and stop it in fixture teardown. The watchdog extraction initially exposed one test that mocked the animation worker but not the new microphone worker; the faster repeatable pattern is to mock the worker start in setup tests and call its stop helper in the shared fixture.
+
+28) Windows cursor recording indicator
+- Hold the dictation trigger and move the pointer across multiple windows. Expected: a thin red ring tracks the pointer without stealing focus or blocking clicks.
+- Hold Shift before the dictation trigger. Expected: the ring is blue for the full latched system-audio capture, including after Shift is released.
+- Release the recording trigger. Expected: the ring disappears immediately; transcription continues normally without the overlay.
+- Set `CURSOR_RECORDING_INDICATOR=0` and restart. Expected: recording behavior is unchanged and no pointer ring appears.

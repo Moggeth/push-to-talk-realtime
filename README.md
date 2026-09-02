@@ -25,6 +25,7 @@ Features
 - GPT post-processing is off by default and falls back to the original transcript if the additional API call fails or returns no text.
 - Tray controls expose common toggles and active selections directly, alongside transcript browsing, restart, and quit actions.
 - Busy tray feedback: non-AppIndicator backends update the tray icon live; microphone recording is red, system-audio recording is blue, recorded transcription is orange with an animated waveform, GPT Live Transcribe uses a static orange finalizing state after release, and GPT post-processing is magenta with an animated sparkle. State changes switch immediately into a destination-dominant color and settle over two short frames. Ubuntu AppIndicator stays on a static icon for stability and writes status changes to the app log.
+- Windows cursor feedback: while recording, a small click-through ring gently pulses and circles the pointer. It follows the tray colors (red microphone, blue system audio), disappears immediately after release, and can be disabled with `CURSOR_RECORDING_INDICATOR=0`.
 - Single-instance guard: accidental duplicate launches exit before installing a second global hotkey listener.
 - Startup hardening: the ready message is logged only after the global hotkey listener starts, and a watchdog restarts the listener if it stops unexpectedly.
 - First-press reliability: if the dictation key is released while the audio session is still starting, the release is remembered and applied as soon as recording becomes active.
@@ -225,6 +226,7 @@ Environment variables:
 - `OPENAI_LIVE_TRANSCRIBE_DELAY` (optional): live model latency preference, default `low`.
 - `OPENAI_REALTIME_WS_URL` (optional): websocket URL for realtime transcription, default `wss://api.openai.com/v1/realtime?intent=transcription`.
 - `REALTIME_AUDIO_QUEUE_MAX_CHUNKS` (optional): bounded number of 40 ms chunks awaiting realtime upload, default `512`; overflow is counted and logged after capture.
+- `CURSOR_RECORDING_INDICATOR` (optional): `1` (default) shows the Windows recording ring around the pointer; set `0` to disable it.
 - `OPENAI_POST_PROCESS_MODEL` (optional): initial GPT post-processing model, default `gpt-5.6-luna`; tray selections are persisted in `settings.json`.
 - `OPENAI_POST_PROCESS_INSTRUCTIONS_PATH` (optional): custom instruction file path, default `post_process_instructions.txt` in the platform runtime-data directory.
 - `REALTIME_LIVE_TYPING` (optional): `1` (default) enables live delta typing for dictation, `0` disables it.

@@ -48,6 +48,7 @@ class FakeThread:
 
 @pytest.fixture(autouse=True)
 def reset_app_state(monkeypatch, tmp_path: Path):
+    app.stop_cursor_recording_indicator()
     app.stop_warm_microphone_watchdog()
     app.warm_microphone_watchdog_thread = None
     app.warm_microphone_capture.stop()
@@ -69,6 +70,7 @@ def reset_app_state(monkeypatch, tmp_path: Path):
     FakeThread.created.clear()
     yield
     app.shutdown_event.set()
+    app.stop_cursor_recording_indicator()
     app.stop_warm_microphone_watchdog()
     app.warm_microphone_watchdog_thread = None
     app.warm_microphone_capture.stop()
@@ -1354,6 +1356,22 @@ def test_update_tray_tooltip_identifies_system_audio_source():
     )
 
 
+def test_cursor_recording_snapshot_uses_latched_audio_source_color():
+    with app.state.lock:
+        app.state.is_listening = True
+        app.state.active_audio_source = app.AUDIO_SOURCE_SYSTEM
+
+    assert app.cursor_recording_snapshot() == (
+        True,
+        app.TRAY_COLOR_SYSTEM_AUDIO_LISTENING,
+    )
+
+    with app.state.lock:
+        app.state.active_audio_source = app.AUDIO_SOURCE_MICROPHONE
+
+    assert app.cursor_recording_snapshot() == (True, app.TRAY_COLOR_LISTENING)
+
+
 def test_update_tray_tooltip_identifies_gpt_post_processing():
     app.tray_icon = FakeTrayIcon()
     with app.state.lock:
@@ -2180,12 +2198,17 @@ def test_tray_setup_marks_icon_visible_and_starts_listener(monkeypatch):
         "start_warm_microphone_watchdog",
         lambda: start_calls.append("microphone-watchdog"),
     )
+    monkeypatch.setattr(
+        app,
+        "start_cursor_recording_indicator",
+        lambda: start_calls.append("cursor-indicator"),
+    )
 
     app.tray_setup(icon)
 
     assert icon.visible is True
     assert refresh_calls == ["refresh"]
-    assert start_calls == ["microphone-watchdog", "start"]
+    assert start_calls == ["microphone-watchdog", "cursor-indicator", "start"]
     assert animation_calls == ["animation"]
     assert logs == [
         (
@@ -2206,11 +2229,16 @@ def test_tray_exit_stops_listener_hides_icon_and_sets_shutdown(monkeypatch):
     icon.visible = True
     monkeypatch.setattr(app, "stop_input_listeners", lambda: stop_calls.append("stop"))
     monkeypatch.setattr(app, "stop_transcript_browser", lambda: stop_calls.append("browser"))
+    monkeypatch.setattr(
+        app,
+        "stop_cursor_recording_indicator",
+        lambda: stop_calls.append("cursor-indicator"),
+    )
 
     app.tray_exit(icon)
 
     assert app.shutdown_event.is_set() is True
-    assert stop_calls == ["stop", "browser"]
+    assert stop_calls == ["cursor-indicator", "stop", "browser"]
     assert icon.visible is False
     assert icon.stopped == 1
 
