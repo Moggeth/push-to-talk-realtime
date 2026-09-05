@@ -40,8 +40,8 @@ Hotkeys
 - Dictation: `F13` by default, intended for a mouse button remapped to F13.
 - System audio dictation: hold `Shift + F13` to capture the currently playing system output on Windows; if output loopback is unavailable, it falls back to a Stereo Mix-style input when available.
 - System audio source latches at recording start: after starting with `Shift + F13`, releasing `Shift` keeps recording system audio until `F13` is released.
-- Work log: `F14` by default
-- Work log: hold `F14` (more than ~0.25s) to record, or double-tap `F14` to open `work_log.txt`.
+- Work log: disabled by default, leaving F14 available to Radial Launcher. Set `WORKLOG_HOTKEY` or `worklog_hotkey` to opt in with another key; an empty value disables it.
+- When configured, hold the work-log key (more than ~0.25s) to record, or double-tap it to open `work_log.txt`.
 - `Set Hotkey...` captures the exact drafted key or key combo and asks you to accept it before saving.
 - The dictation keyboard hotkey only fires when the drafted keys are the only keys being held, except for the special `Shift + hotkey` system-audio path.
 - Recommended Windows setup: map your mouse side button to `F13` in your mouse software. It is usually much less collision-prone than common keyboard keys.
@@ -237,7 +237,7 @@ Environment variables:
 - `PUSH_TO_TALK_LOG_MAX_BYTES` (optional): rotate the application log at this size, default 5 MiB.
 - `PUSH_TO_TALK_LOG_BACKUP_COUNT` (optional): number of rotated application logs to retain, default `3`.
 - `DICTATION_HOTKEY` (optional): single-key trigger for dictation, default `F13`.
-- `WORKLOG_HOTKEY` (optional): single-key trigger for work log capture, default `F14`.
+- `WORKLOG_HOTKEY` (optional): single-key trigger for work log capture, disabled by default (empty string).
 - `PUSH_TO_TALK_SERVICE_NAME` (optional): service name used by the tray `Restart` / `Quit` actions, default `push-to-talk-realtime.service`.
 - `DICTATION_DEVICE` (optional): device index or name fragment for the shared microphone input.
 - `WORKLOG_DEVICE` (optional): legacy alias for the shared microphone input when `DICTATION_DEVICE` is unset.
@@ -303,3 +303,7 @@ Notes and tips
 - Realtime live typing applies only to dictation mode and may need app focus to stay in the target field.
 - GPT Live Transcribe has no fallback model or local chunking path. A failed live session is logged instead of silently changing transcription engines. Realtime shutdown allows the configured ready and final-response deadlines, then explicitly cancels the worker; queue overflow is reported rather than silently ignored.
 - If realtime dependencies are missing, GPT Live Transcribe selection logs an install hint and stays on recorded mode.
+
+### Releasing a conflicting shortcut
+
+Hotkeys are loaded at startup. Changing the default alone does not replace a saved `worklog_hotkey`: set it to an empty string in the active settings file and restart the tray app. Check `WORKLOG_HOTKEY` overrides too. Normal F13 dictation remains available.

@@ -221,8 +221,8 @@ CI now runs:
 - Expected: a new line is appended with a full date/time stamp and a `[Dictation]` tag.
 - In `History`, toggle `Save legacy text log` off, dictate again, and confirm no new dictation history line is added.
 
-14) Work log hotkey (F14 by default)
-- Hold F14 for at least ~0.25s, speak a short sentence, release.
+14) Work log hotkey (disabled by default; configure F16 for this test)
+- Hold F16 for at least ~0.25s, speak a short sentence, release.
 - Expected: a new timestamped line appears in `work_log.txt` with a `[Work log]` tag.
 
 15) Mute monitor (optional)
@@ -235,7 +235,7 @@ CI now runs:
   continues or exits cleanly if no input device is available.
 
 17) Work log double-tap
-- Double-tap F14 while idle.
+- Double-tap F16 while idle.
 - Expected: `work_log.txt` opens and no new recording starts.
 
 18) Overlap while transcribing
@@ -338,3 +338,5 @@ Threaded tray tests must isolate every worker started by `tray_setup` and stop i
 - Watch the ring on a high-refresh display while recording. Expected: motion is fluid at the 120 Hz target without affecting pointer movement, capture, or transcription latency.
 - Inspect the thin circular track against both light and dark windows. Expected: curved edges are smoothly alpha-blended with no dark halo, square background, or visibly stair-stepped pixels.
 - Set `CURSOR_RECORDING_INDICATOR=0` and restart. Expected: recording behavior is unchanged and no pointer ring appears.
+
+- With the work-log key empty, pressing/releasing F14 must not create a capture or a delayed work-log thread. F13 dictation remains active. Covered by `test_disabled_worklog_does_not_handle_f14`.

@@ -243,7 +243,7 @@ AUDIO_SOURCE_SYSTEM = "system"
 
 HOTKEY_KIND_KEYBOARD = "keyboard"
 DEFAULT_HOTKEY_DICTATION = "F13"
-DEFAULT_HOTKEY_WORKLOG = "F14"
+DEFAULT_HOTKEY_WORKLOG = ""
 PASTE_ON_RELEASE = True
 DEFAULT_SUFFIX_MODE = SUFFIX_SPACE
 DEFAULT_DICTATION_HISTORY_ENABLED = True
@@ -3754,7 +3754,7 @@ def build_shortcuts_startup_menu() -> pystray.Menu:
             f"Dictation: {compact_menu_value(dictation_hotkey_summary(), 28)}...",
             prompt_for_hotkey,
         ),
-        pystray.MenuItem(f"Work log: {HOTKEY_WORKLOG}", None, enabled=False),
+        pystray.MenuItem(f"Work log: {HOTKEY_WORKLOG or 'Disabled'}", None, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(
             "Run at login",

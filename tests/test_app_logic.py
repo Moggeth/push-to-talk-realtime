@@ -53,6 +53,7 @@ def reset_app_state(monkeypatch, tmp_path: Path):
     app.warm_microphone_watchdog_thread = None
     app.warm_microphone_capture.stop()
     app.state = app.SessionState()
+    monkeypatch.setattr(app, "HOTKEY_WORKLOG", "F16")
     app.tray_icon = None
     app.reset_tray_visual_state()
     app.tray_status_signature = None
@@ -2419,3 +2420,14 @@ def test_toggle_run_on_startup_enables_and_refreshes(monkeypatch):
 
     assert refresh_calls == ["refresh"]
     assert logs == ["[Startup] Run on startup enabled."]
+
+
+def test_disabled_worklog_does_not_handle_f14(monkeypatch):
+    monkeypatch.setattr(app, "HOTKEY_WORKLOG", app.DEFAULT_HOTKEY_WORKLOG)
+    monkeypatch.setattr(app.threading, "Thread", FakeThread)
+    app.on_press(make_key("F14"))
+    app.on_release(make_key("F14"))
+    assert app.DEFAULT_HOTKEY_WORKLOG == ""
+    assert not app.state.worklog_is_pressed
+    assert not app.state.session_start_pending
+    assert not FakeThread.created
