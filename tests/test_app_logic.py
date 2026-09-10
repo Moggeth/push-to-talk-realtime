@@ -713,6 +713,10 @@ def test_save_settings_to_disk_includes_hotkeys(monkeypatch, tmp_path: Path):
         "post_process_instruction_profile": "light_touch",
         "dictation_hotkey": "F17",
         "worklog_hotkey": "F18",
+        "rewrite_profiles": {},
+        "feedback": {key: getattr(app.state, key) for key in app.SETTINGS_FLAGS},
+        "paste_suffix_mode": app.state.paste_suffix_mode,
+        "input_device_label": app.state.dictation_device_label,
     }
 
 
@@ -1365,7 +1369,6 @@ def test_cursor_indicator_snapshot_uses_latched_audio_source_color():
     assert app.cursor_indicator_snapshot() == app.CursorIndicatorSnapshot(
         True,
         app.TRAY_COLOR_SYSTEM_AUDIO_LISTENING,
-        label="Raw",
     )
 
     with app.state.lock:
@@ -1374,7 +1377,6 @@ def test_cursor_indicator_snapshot_uses_latched_audio_source_color():
     assert app.cursor_indicator_snapshot() == app.CursorIndicatorSnapshot(
         True,
         app.TRAY_COLOR_LISTENING,
-        label="Raw",
     )
 
 
@@ -2071,7 +2073,8 @@ def test_menu_builders_include_expected_top_level_items(monkeypatch):
     assert [item.text for item in menu] == [
         "Mode: Raw",
         "Transcript history",
-        "Settings",
+        "Settings...",
+        "Shortcuts & startup",
         "- - - -",
         "Restart",
         "Quit",

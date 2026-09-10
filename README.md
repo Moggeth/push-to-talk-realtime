@@ -52,7 +52,7 @@ Tray Menu
 ---------
 - Mode: Raw / Tidy / Fun for the current recording. Every new recording starts Raw; mode selection is disabled while idle.
 - Transcript history: opens the searchable local browser with raw and final text, copy and delete controls.
-- Settings: transcription model, audio input, rewrite model and Tidy instructions, text behavior, shortcuts/startup, and the optional legacy log.
+- Settings...: opens one resizable native window, also available through the tray's default action (double-click on Windows). Recording contains the transcription model, microphone, capture behavior and paste suffix. Tidy and Fun each have an independent model and inline instruction editor. Feedback contains symbol labels, sounds, text formatting and optional plain-text history. Shortcuts & startup remains a shallow tray submenu.
 - Restart: restarts the systemd user service when managed by systemd, otherwise waits for the current tray instance to exit before relaunching the tracked entry point.
 - Quit: exits the tray app, or stops the systemd user service when managed by systemd.
 
@@ -63,13 +63,14 @@ Controls:
   - GPT Transcribe: recorded backup used when live dependencies are unavailable.
   - Saved GPT-4o Transcribe, GPT-4o Mini Transcribe, and Whisper selections migrate to GPT Transcribe.
 - On Windows, hold Rear Edge (F13) and click right fingertip (currently Paste) to cycle Raw -> Tidy -> Fun -> Raw. No Swiftpoint profile edits are needed: the app consumes Ctrl+V during capture, including repeats and key-up. Keyboard Ctrl+V also cycles during capture; outside capture it pastes normally. Release Rear Edge to finish with the selected mode, even if right fingertip is still held. Ctrl+V must be sent after recording starts, not held before F13.
-- Raw skips GPT. Tidy removes transcription mistakes, filler and repeated thoughts using the selected instruction profile. Fun tidies with restrained exclamation marks and context-appropriate emojis while preserving meaning. The cursor ring names the current mode without changing microphone/system-audio colors.
+- Raw skips GPT. Tidy removes transcription mistakes, filler and repeated thoughts. Fun tidies with restrained exclamation marks and context-appropriate emojis while preserving meaning. Raw has a plain traveler, Tidy a short trail with a diamond, and Fun a pulsing four-point sparkle. Mode changes preserve orbit position; microphone/system-audio colors do not change. Names are optional under Settings -> Feedback.
 - Every non-empty raw transcript is committed to `transcripts.db` before rewriting, regardless of the legacy text-log switch. History preserves both versions. If saving fails, rewriting is skipped and raw output is retained. No recorded audio is retained by this archive.
 - GPT model and instructions:
   - Model: choose GPT-5.6 Luna (fast), Terra (balanced), or Sol (highest quality).
-  - Instructions: choose Clean up speech, Make concise, Light touch, or Custom instructions.
-  - Edit custom instructions...: appears in the instructions submenu and opens the local `post_process_instructions.txt` file. The app creates it on first use and rereads it for every custom-profile request, so edits do not require a restart.
-  - Model selection applies to Tidy and Fun; editable instructions apply to Tidy. Streaming recognition continues during capture, but output waits for release so late mode changes cannot leave duplicate text. The old persistent cleanup switch no longer controls recording mode.
+  - Settings -> Tidy or Fun: edit that mode's model and instructions together, then Save. Cancel changes nothing. Restore default instructions replaces the editor's text without changing the model; it only takes effect after Save.
+  - Existing instruction presets/custom-file content populate the initial Tidy editor. After saving, each mode's model and text live independently in the existing settings file; editing the old custom file no longer changes a saved profile. Settings capture a profile at recording start, so editing another window cannot alter a recording already underway.
+  - Model choices, rewrite instructions, feedback preferences, paste suffix and microphone selection survive restart. If a saved microphone is absent, capture uses the existing default-device fallback. Explicit device environment overrides still take priority.
+  - Streaming recognition continues during capture, but output waits for release so late mode changes cannot leave duplicate text. The old persistent cleanup switch no longer controls recording mode.
 - Text output:
   - Suffix: None / Space / Newline (affects pasted dictation only).
   - Ensure terminal punctuation (adds "." if missing; enabled by default).

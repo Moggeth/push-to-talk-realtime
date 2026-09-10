@@ -219,6 +219,17 @@ POST_PROCESS_INSTRUCTION_LABELS = {
     "custom": "Custom instructions",
 }
 DEFAULT_POST_PROCESS_INSTRUCTION_PROFILE = "clean_up"
+SETTINGS_FLAGS = (
+    "toggle_mode_enabled",
+    "show_mode_labels",
+    "beeps_enabled",
+    "tooltip_enabled",
+    "monitor_enabled",
+    "punctuation_terminal",
+    "punctuation_capitalize",
+    "punctuation_normalize_spaces",
+    "dictation_history_enabled",
+)
 
 # Audio capture
 SAMPLE_RATE = 16000
@@ -439,6 +450,7 @@ class SessionState:
     dictation_hotkey_tokens: tuple[str, ...] = (HOTKEY_DICTATION,)
     dictation_device_index: int | None = DEVICE_INDEX
     dictation_device_label: str = DEFAULT_DEVICE_LABEL
+    saved_input_device_label: str = ""
     worklog_device_index: int | None = DEVICE_INDEX
     worklog_device_label: str = DEFAULT_DEVICE_LABEL
     stereo_mix_device_index: int | None = None
@@ -463,6 +475,8 @@ class SessionState:
     )
     post_processing_enabled: bool = False
     recording_rewrite_mode: str = "raw"
+    show_mode_labels: bool = False
+    rewrite_profiles: dict = field(default_factory=dict)
     post_process_model: str = normalize_post_process_model(DEFAULT_POST_PROCESS_MODEL)
     post_process_instruction_profile: str = DEFAULT_POST_PROCESS_INSTRUCTION_PROFILE
     worklog_press_time: float = 0.0
@@ -601,15 +615,20 @@ def cursor_indicator_snapshot() -> CursorIndicatorSnapshot:
         is_transcribing = state.is_transcribing
         audio_source = state.active_audio_source
         rewrite_mode = state.recording_rewrite_mode
+        show_labels = state.show_mode_labels
     if is_listening:
         color = (
             TRAY_COLOR_SYSTEM_AUDIO_LISTENING
             if audio_source == AUDIO_SOURCE_SYSTEM
             else TRAY_COLOR_LISTENING
         )
-        return CursorIndicatorSnapshot(True, color, label=rewrite_mode.title())
+        return CursorIndicatorSnapshot(
+            True, color, label=rewrite_mode.title() if show_labels else "", mode=rewrite_mode
+        )
     if is_transcribing:
-        return CursorIndicatorSnapshot(True, TRAY_COLOR_TRANSCRIBING, motion_speed=2.6)
+        return CursorIndicatorSnapshot(
+            True, TRAY_COLOR_TRANSCRIBING, motion_speed=2.6, mode=rewrite_mode
+        )
     return CursorIndicatorSnapshot(False, TRAY_COLOR_READY)
 
 
@@ -778,7 +797,7 @@ def write_settings_payload(payload: dict[str, Any]) -> None:
     temp_path.replace(SETTINGS_PATH)
 
 
-def save_settings_to_disk() -> None:
+def save_settings_to_disk() -> bool:
     with state.lock:
         payload = {
             "transcription_engine": state.transcription_engine,
@@ -791,11 +810,17 @@ def save_settings_to_disk() -> None:
             "post_process_instruction_profile": state.post_process_instruction_profile,
             "dictation_hotkey": HOTKEY_DICTATION,
             "worklog_hotkey": HOTKEY_WORKLOG,
+            "rewrite_profiles": state.rewrite_profiles,
+            "feedback": {key: getattr(state, key) for key in SETTINGS_FLAGS},
+            "paste_suffix_mode": state.paste_suffix_mode,
+            "input_device_label": state.dictation_device_label,
         }
     try:
         write_settings_payload(payload)
+        return True
     except Exception as exc:  # pylint: disable=broad-except
         log("[Settings] Unable to save settings:", exc)
+        return False
 
 
 def apply_persisted_settings() -> None:
@@ -856,6 +881,31 @@ def apply_persisted_settings() -> None:
         state.post_processing_enabled = post_processing_enabled
         state.post_process_model = post_process_model
         state.post_process_instruction_profile = post_process_instruction_profile
+        state.saved_input_device_label = str(settings.get("input_device_label", ""))
+        profiles = settings.get("rewrite_profiles", {})
+        state.rewrite_profiles = {}
+        if isinstance(profiles, dict):
+            for mode in ("tidy", "fun"):
+                profile = profiles.get(mode)
+                if (
+                    isinstance(profile, dict)
+                    and isinstance(profile.get("instructions"), str)
+                    and profile["instructions"].strip()
+                ):
+                    state.rewrite_profiles[mode] = {
+                        "model": normalize_post_process_model(
+                            str(profile.get("model", post_process_model))
+                        ),
+                        "instructions": profile["instructions"],
+                    }
+        feedback = settings.get("feedback", {})
+        if isinstance(feedback, dict):
+            for key in SETTINGS_FLAGS:
+                if isinstance(feedback.get(key), bool):
+                    setattr(state, key, feedback[key])
+        suffix = settings.get("paste_suffix_mode")
+        if suffix in (SUFFIX_NONE, SUFFIX_SPACE, SUFFIX_NEWLINE):
+            state.paste_suffix_mode = suffix
     HOTKEY_WORKLOG = worklog_hotkey
     log(
         f"[Settings] Loaded transcription engine: "
@@ -1689,6 +1739,12 @@ def initialize_device_state() -> None:
 
     device_index = fallback_index
     device_label = fallback_label
+    if not shared_descriptor and state.saved_input_device_label:
+        refresh_device_list()
+        for index, label in DEVICE_LIST:
+            if label == state.saved_input_device_label:
+                device_index, device_label = index, label
+                break
     if shared_descriptor:
         idx, label, ok = resolve_device_descriptor(shared_descriptor)
         if ok:
@@ -2468,6 +2524,7 @@ def finalize_session_transcription(
     realtime_stop_event: threading.Event | None,
     realtime_cancel_event: threading.Event | None,
     realtime_result: dict[str, str],
+    rewrite_instructions: str | None = None,
 ) -> TranscriptionOutcome:
     use_realtime = transcription_engine == TRANSCRIPTION_ENGINE_LIVE
     mark_transcription_started(live_finalizing=use_realtime)
@@ -2519,7 +2576,11 @@ def finalize_session_transcription(
         if transcript_text.strip():
             if post_processing_enabled:
                 try:
-                    instructions = post_process_instructions(post_process_instruction_profile)
+                    instructions = (
+                        rewrite_instructions
+                        if rewrite_instructions is not None
+                        else post_process_instructions(post_process_instruction_profile)
+                    )
                 except Exception as exc:
                     instruction_error = exc
             archive_entry_id = archive_raw_transcript(
@@ -2709,6 +2770,7 @@ def start_listening(
         recorded_transcription_model = state.recorded_transcription_model
         post_process_model = state.post_process_model
         post_process_instruction_profile = state.post_process_instruction_profile
+        rewrite_profiles = {key: dict(value) for key, value in state.rewrite_profiles.items()}
     label = "Dictate" if mode == MODE_DICTATION else "Log"
     action = "Tap" if toggle_mode else "Hold"
     use_realtime_streaming = transcription_engine == TRANSCRIPTION_ENGINE_LIVE
@@ -2842,6 +2904,13 @@ def start_listening(
     post_processing_enabled = capture_timestamps.rewrite_mode != "raw"
     if capture_timestamps.rewrite_mode == "fun":
         post_process_instruction_profile = "fun"
+    selected_profile = rewrite_profiles.get(capture_timestamps.rewrite_mode)
+    rewrite_instructions = None
+    if selected_profile:
+        post_process_model = selected_profile["model"]
+        rewrite_instructions = selected_profile["instructions"]
+        if capture_timestamps.rewrite_mode == "tidy":
+            post_process_instruction_profile = "custom"
     log(f"[Rewrite] Session {session_id}: {capture_timestamps.rewrite_mode}")
     outcome = finalize_session_transcription(
         chunks=chunks,
@@ -2852,6 +2921,7 @@ def start_listening(
         post_processing_enabled=post_processing_enabled,
         post_process_model=post_process_model,
         post_process_instruction_profile=post_process_instruction_profile,
+        rewrite_instructions=rewrite_instructions,
         realtime_worker=realtime_worker,
         realtime_stop_event=realtime_stop_event,
         realtime_cancel_event=realtime_cancel_event,
@@ -3892,6 +3962,136 @@ def build_recording_mode_menu() -> pystray.Menu:
     return pystray.Menu(*(item(mode) for mode in MODES))
 
 
+settings_window_lock = threading.Lock()
+
+
+def settings_window_payload() -> dict:
+    with state.lock:
+        profiles = {mode: dict(profile) for mode, profile in state.rewrite_profiles.items()}
+        model = state.post_process_model
+        tidy_profile = state.post_process_instruction_profile
+        flags = {key: getattr(state, key) for key in SETTINGS_FLAGS}
+        transcription = state.transcription_engine
+        suffix = state.paste_suffix_mode
+        device = state.dictation_device_label
+    defaults = {
+        "tidy": POST_PROCESS_INSTRUCTION_PROFILES["clean_up"],
+        "fun": POST_PROCESS_INSTRUCTION_PROFILES["fun"],
+    }
+    for mode in ("tidy", "fun"):
+        if mode not in profiles:
+            profiles[mode] = {
+                "model": model,
+                "instructions": post_process_instructions(tidy_profile)
+                if mode == "tidy"
+                else defaults[mode],
+            }
+    return {
+        "profiles": profiles,
+        "defaults": defaults,
+        "model_labels": POST_PROCESS_MODEL_LABELS,
+        "flags": flags,
+        "suffix": (SUFFIX_NONE, SUFFIX_SPACE, SUFFIX_NEWLINE).index(suffix),
+        "transcription": "GPT Live Transcribe"
+        if transcription == TRANSCRIPTION_ENGINE_LIVE
+        else "GPT Transcribe",
+        "transcription_options": ["GPT Live Transcribe", "GPT Transcribe"],
+        "devices": list(
+            dict.fromkeys([DEFAULT_DEVICE_LABEL, device, *(label for _, label in DEVICE_LIST)])
+        ),
+        "device": device,
+        "legacy_log_path": str(WORK_LOG_PATH),
+    }
+
+
+def apply_settings_window_result(result: dict) -> None:
+    profiles = result["profiles"]
+    for mode in ("tidy", "fun"):
+        if (
+            profiles[mode]["model"] not in POST_PROCESS_MODEL_OPTIONS
+            or not profiles[mode]["instructions"].strip()
+        ):
+            raise ValueError("Invalid rewrite profile")
+    suffix = (SUFFIX_NONE, SUFFIX_SPACE, SUFFIX_NEWLINE)[result["suffix"]]
+    engine = (
+        TRANSCRIPTION_ENGINE_LIVE
+        if result["transcription"] == "GPT Live Transcribe"
+        else TRANSCRIPTION_ENGINE_RECORDED
+    )
+    if engine == TRANSCRIPTION_ENGINE_LIVE:
+        error = realtime_dependency_error()
+        if error:
+            raise RuntimeError(error)
+    with state.lock:
+        state.rewrite_profiles = {mode: dict(profiles[mode]) for mode in ("tidy", "fun")}
+        state.transcription_engine = engine
+        state.recorded_transcription_model = DEFAULT_RECORDED_TRANSCRIBE_MODEL
+        state.paste_suffix_mode = suffix
+        for key in SETTINGS_FLAGS:
+            setattr(state, key, bool(result["flags"][key]))
+    if result["device"] != current_input_device_label():
+        devices = {label: index for index, label in DEVICE_LIST}
+        set_input_device(devices.get(result["device"]), result["device"])
+    if not save_settings_to_disk():
+        raise RuntimeError("Preferences are active but could not be saved for the next launch")
+    rebuild_tray_menu()
+    log("[Settings] Saved recording, rewrite profiles and feedback preferences.")
+
+
+def open_settings_window(_icon=None, _item=None) -> None:
+    if not settings_window_lock.acquire(blocking=False):
+        if platform.system() == "Windows":
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+            user32.FindWindowW.restype = wintypes.HWND
+            window = user32.FindWindowW(None, "Push-to-talk settings")
+            if window:
+                user32.ShowWindow(wintypes.HWND(window), 9)
+                user32.SetForegroundWindow(wintypes.HWND(window))
+        return
+
+    def run():
+        try:
+            refresh_device_list()
+            helper_python = (
+                sys.executable
+                if platform.system() != "Linux"
+                else os.getenv("PUSH_TO_TALK_HELPER_PYTHON", "/usr/bin/python3")
+            )
+            completed = subprocess.run(
+                [helper_python, str(SCRIPT_DIR / "settings_window.py")],
+                input=json.dumps(settings_window_payload()),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd=str(SCRIPT_DIR),
+                env=hotkey_helper_env(),
+            )
+            if completed.returncode:
+                raise RuntimeError(
+                    completed.stderr.strip() or "Settings window exited unexpectedly"
+                )
+            result = json.loads(completed.stdout)
+            if result is not None:
+                apply_settings_window_result(result)
+        except Exception as exc:
+            log("[Settings] Unable to edit settings:", exc)
+            if tray_icon is not None:
+                with suppress(Exception):
+                    tray_icon.notify(str(exc), "Settings could not be saved")
+        finally:
+            settings_window_lock.release()
+
+    try:
+        threading.Thread(target=run, name="settings-window", daemon=True).start()
+    except Exception:
+        settings_window_lock.release()
+        raise
+
+
 def build_settings_menu() -> pystray.Menu:
     return pystray.Menu(
         pystray.MenuItem(
@@ -3925,7 +4125,8 @@ def build_menu() -> pystray.Menu:
             build_recording_mode_menu(),
         ),
         pystray.MenuItem("Transcript history", open_transcript_browser),
-        pystray.MenuItem("Settings", build_settings_menu()),
+        pystray.MenuItem("Settings...", open_settings_window, default=True),
+        pystray.MenuItem("Shortcuts & startup", build_shortcuts_startup_menu()),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Restart", restart_app),
         pystray.MenuItem("Quit", quit_app),

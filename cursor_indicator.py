@@ -38,6 +38,7 @@ class CursorIndicatorSnapshot:
     color: tuple[int, int, int, int]
     motion_speed: float = 1.0
     label: str = ""
+    mode: str = "raw"
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class IndicatorVisual:
     color: tuple[int, int, int, int]
     opacity: float
     label: str = ""
+    mode: str = "raw"
 
 
 def indicator_frame(elapsed_s: float, motion_speed: float = 1.0) -> IndicatorFrame:
@@ -151,7 +153,14 @@ class IndicatorAnimator:
             arc_extent=base_frame.arc_extent,
             arc_width=base_frame.arc_width * (0.55 + 0.45 * geometry_scale),
         )
-        return IndicatorVisual(True, frame, self.current_color, opacity, effective_snapshot.label)
+        return IndicatorVisual(
+            True,
+            frame,
+            self.current_color,
+            opacity,
+            effective_snapshot.label,
+            effective_snapshot.mode,
+        )
 
     def _hidden_visual(self) -> IndicatorVisual:
         return IndicatorVisual(
@@ -175,6 +184,7 @@ def render_indicator_image(
     scale: int = INDICATOR_SUPERSAMPLE_SCALE,
     opacity: float = 1.0,
     label: str = "",
+    mode: str = "raw",
 ) -> Image.Image:
     render_size = size * scale
     center = render_size / 2
@@ -194,13 +204,39 @@ def render_indicator_image(
         outline=(*track_rgb, round(178 * alpha_scale)),
         width=max(1, round(TRACK_WIDTH * scale)),
     )
+    extent = frame.arc_extent if mode == "raw" else (42.0 if mode == "tidy" else 66.0)
+    end_angle = frame.arc_start + frame.arc_extent
     draw.arc(
         bounds,
-        start=frame.arc_start,
-        end=frame.arc_start + frame.arc_extent,
+        start=end_angle - extent,
+        end=end_angle,
         fill=(*color[:3], round(color[3] * alpha_scale)),
         width=max(1, round(frame.arc_width * scale)),
     )
+    if mode in ("tidy", "fun"):
+
+        def point(angle, distance):
+            radians = math.radians(angle)
+            return (center + math.cos(radians) * distance, center + math.sin(radians) * distance)
+
+        x, y = point(end_angle, radius)
+        marker = min(1.0, frame.radius / 25.0) * scale
+        fill = (*color[:3], round(255 * alpha_scale))
+        if mode == "tidy":
+            r = 3.2 * marker
+            draw.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)], fill=fill)
+        else:
+            r = (4.0 + (frame.arc_width - 2.6) * 1.8) * marker
+            points = []
+            for index in range(8):
+                angle = math.radians(index * 45 - 90)
+                length = r if index % 2 == 0 else r * 0.3
+                points.append((x + math.cos(angle) * length, y + math.sin(angle) * length))
+            draw.polygon(points, fill=fill)
+            for offset, dot in ((-22, 1.5), (-40, 0.9)):
+                dx, dy = point(end_angle + offset, radius)
+                dr = dot * marker
+                draw.ellipse((dx - dr, dy - dr, dx + dr, dy + dr), fill=fill)
     if label:
         font = indicator_label_font(scale)
         draw.text(
@@ -546,6 +582,7 @@ class CursorActivityIndicator:
                 visual.color,
                 opacity=visual.opacity,
                 label=visual.label,
+                mode=visual.mode,
             )
             pixels = premultiplied_bgra_bytes(image)
             ctypes.memmove(pixel_buffer, pixels, len(pixels))
