@@ -39,6 +39,7 @@ from pynput import keyboard as pynput_keyboard
 
 import desktop_bootstrap  # noqa: F401
 from cursor_indicator import CursorActivityIndicator, CursorIndicatorSnapshot
+from recording_modes import MODES, PasteCycleFilter
 from history_store import append_history_entry as append_history_entry_core
 from platform_input import (
     PasteTarget,
@@ -189,10 +190,17 @@ POST_PROCESS_MODEL_LABELS = {
 }
 DEFAULT_POST_PROCESS_MODEL = os.getenv("OPENAI_POST_PROCESS_MODEL", "gpt-5.6-luna").strip()
 POST_PROCESS_INSTRUCTION_PROFILES = {
+    "fun": (
+        "Tidy this speech-to-text message, removing filler, repeated thoughts and false starts. "
+        "Make it friendly and lively with natural exclamation marks and a few appropriate emojis. "
+        "Use restraint for serious or sensitive topics. Preserve meaning, facts, names, requests "
+        "and caveats; do not invent enthusiasm, commitments or extra information."
+    ),
     "clean_up": (
         "Clean up the transcript for natural written communication. Correct likely transcription "
         "errors, punctuation, capitalization, and false starts while preserving the speaker's "
-        "meaning, tone, names, and technical terms."
+        "meaning, tone, names, and technical terms. Collapse repeated thoughts and filler into "
+        "one coherent message without losing material details, requests or caveats."
     ),
     "concise": (
         "Rewrite the transcript clearly and concisely. Remove filler words, repetitions, and false "
@@ -204,6 +212,7 @@ POST_PROCESS_INSTRUCTION_PROFILES = {
     ),
 }
 POST_PROCESS_INSTRUCTION_LABELS = {
+    "fun": "Fun",
     "clean_up": "Clean up speech",
     "concise": "Make concise",
     "light_touch": "Light touch",
@@ -453,6 +462,7 @@ class SessionState:
         DEFAULT_RECORDED_TRANSCRIBE_MODEL
     )
     post_processing_enabled: bool = False
+    recording_rewrite_mode: str = "raw"
     post_process_model: str = normalize_post_process_model(DEFAULT_POST_PROCESS_MODEL)
     post_process_instruction_profile: str = DEFAULT_POST_PROCESS_INSTRUCTION_PROFILE
     worklog_press_time: float = 0.0
@@ -590,13 +600,14 @@ def cursor_indicator_snapshot() -> CursorIndicatorSnapshot:
         is_listening = state.is_listening
         is_transcribing = state.is_transcribing
         audio_source = state.active_audio_source
+        rewrite_mode = state.recording_rewrite_mode
     if is_listening:
         color = (
             TRAY_COLOR_SYSTEM_AUDIO_LISTENING
             if audio_source == AUDIO_SOURCE_SYSTEM
             else TRAY_COLOR_LISTENING
         )
-        return CursorIndicatorSnapshot(True, color)
+        return CursorIndicatorSnapshot(True, color, label=rewrite_mode.title())
     if is_transcribing:
         return CursorIndicatorSnapshot(True, TRAY_COLOR_TRANSCRIBING, motion_speed=2.6)
     return CursorIndicatorSnapshot(False, TRAY_COLOR_READY)
@@ -859,13 +870,8 @@ def apply_persisted_settings() -> None:
         "enabled" if dictation_history_enabled else "disabled",
     )
     log(
-        "[Settings] GPT post-processing:",
-        (
-            f"enabled ({post_process_model_label(post_process_model)}, "
-            f"{POST_PROCESS_INSTRUCTION_LABELS[post_process_instruction_profile]})"
-            if post_processing_enabled
-            else "disabled"
-        ),
+        "[Settings] Rewrite: Raw for each recording; Tidy/Fun model:",
+        post_process_model_label(post_process_model),
     )
 
 
@@ -1334,6 +1340,42 @@ def keyboard_listener_is_running() -> bool:
         return False
 
 
+def cycle_recording_mode() -> bool:
+    with state.lock:
+        if not (state.is_listening or state.session_start_pending):
+            return False
+        if state.should_stop or state.pending_start_stop_requested:
+            return False
+        index = MODES.index(state.recording_rewrite_mode)
+        state.recording_rewrite_mode = MODES[(index + 1) % len(MODES)]
+    return True
+
+
+def create_keyboard_listener():
+    if platform.system() != "Windows":
+        return pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
+    import ctypes
+
+    chord = PasteCycleFilter(cycle_recording_mode)
+
+    def event_filter(msg, data):
+        if msg not in (0x100, 0x101, 0x104, 0x105):
+            return True
+        if chord.consume(
+            data.vkCode,
+            msg in (0x100, 0x104),
+            bool(ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000),
+            int(data.dwExtraInfo or 0),
+        ):
+            listener.suppress_event()
+        return True
+
+    listener = pynput_keyboard.Listener(
+        on_press=on_press, on_release=on_release, win32_event_filter=event_filter
+    )
+    return listener
+
+
 def start_keyboard_listener() -> None:
     global keyboard_listener
     with keyboard_listener_lock:
@@ -1344,7 +1386,7 @@ def start_keyboard_listener() -> None:
             with suppress(Exception):
                 keyboard_listener.stop()
             keyboard_listener = None
-        keyboard_listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
+        keyboard_listener = create_keyboard_listener()
         keyboard_listener.start()
 
 
@@ -1372,7 +1414,7 @@ def restart_keyboard_listener(reason: str) -> None:
                 log(f"[Input] Keyboard listener stop failed during {reason}:", exc)
             keyboard_listener = None
         clear_pressed_key_state()
-        keyboard_listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
+        keyboard_listener = create_keyboard_listener()
         keyboard_listener.start()
     log(f"[Input] Keyboard listener rebound ({reason}).")
 
@@ -2176,6 +2218,7 @@ class CaptureTimestamps:
     start_requested_at: float
     stream_ready_at: float
     first_audio_at: float
+    rewrite_mode: str = "raw"
 
 
 def _clear_pending_session_start_locked() -> None:
@@ -2231,6 +2274,7 @@ def begin_session_start(
         if state.is_listening or state.session_start_pending:
             return False
         state.session_start_pending = True
+        state.recording_rewrite_mode = "raw"
         state.pending_start_hotkey_kind = hotkey_kind
         state.pending_start_hotkey_tokens = hotkey_tokens
         state.pending_start_stop_hotkey_tokens = stop_hotkey_tokens
@@ -2271,6 +2315,8 @@ def activate_session(
             and state.pending_start_stop_requested
         )
         start_requested_at = state.pending_start_requested_at or time.monotonic()
+        if not state.session_start_pending:
+            state.recording_rewrite_mode = "raw"
         state.session_counter += 1
         session_id = state.session_counter
         state.active_session_id = session_id
@@ -2344,6 +2390,7 @@ def finish_capture_session(session_id: int) -> CaptureTimestamps:
             state.active_start_requested_at,
             state.active_stream_ready_at,
             state.active_first_audio_at,
+            state.recording_rewrite_mode,
         )
         if state.active_session_id == session_id:
             _clear_active_session_locked()
@@ -2468,9 +2515,13 @@ def finalize_session_transcription(
         post_process_status = "not_requested"
         post_process_error = ""
         instructions = ""
+        instruction_error = None
         if transcript_text.strip():
             if post_processing_enabled:
-                instructions = post_process_instructions(post_process_instruction_profile)
+                try:
+                    instructions = post_process_instructions(post_process_instruction_profile)
+                except Exception as exc:
+                    instruction_error = exc
             archive_entry_id = archive_raw_transcript(
                 mode=mode,
                 audio_source=audio_source,
@@ -2492,6 +2543,10 @@ def finalize_session_transcription(
             post_process_started_at = time.perf_counter()
             mark_post_processing_started()
             try:
+                if archive_entry_id is None:
+                    raise RuntimeError("Raw transcript could not be archived; keeping raw output")
+                if instruction_error is not None:
+                    raise instruction_error
                 processed_text = post_process_transcript(
                     transcript_text,
                     post_process_model,
@@ -2652,7 +2707,6 @@ def start_listening(
         toggle_mode = state.toggle_mode_enabled
         transcription_engine = state.transcription_engine
         recorded_transcription_model = state.recorded_transcription_model
-        post_processing_enabled = state.post_processing_enabled
         post_process_model = state.post_process_model
         post_process_instruction_profile = state.post_process_instruction_profile
     label = "Dictate" if mode == MODE_DICTATION else "Log"
@@ -2665,15 +2719,8 @@ def start_listening(
     realtime_result: dict[str, str] = {"text": ""}
     realtime_delta_parts: list[str] = []
     realtime_delta_lock = threading.Lock()
-    with state.output_condition:
-        session_is_next_output = state.next_output_session_id == session_id
-    live_typing_enabled = (
-        use_realtime_streaming
-        and mode == MODE_DICTATION
-        and REALTIME_LIVE_TYPING_ENABLED
-        and session_is_next_output
-        and not post_processing_enabled
-    )
+    # Streaming recognition stays enabled, but output waits for the final rewrite choice.
+    live_typing_enabled = False
 
     on_audio_chunk: Callable[[np.ndarray], None] | None = None
     if use_realtime_streaming:
@@ -2792,6 +2839,10 @@ def start_listening(
         )
     with buffer_lock:
         chunks = [chunk.copy() for chunk in record_buffer]
+    post_processing_enabled = capture_timestamps.rewrite_mode != "raw"
+    if capture_timestamps.rewrite_mode == "fun":
+        post_process_instruction_profile = "fun"
+    log(f"[Rewrite] Session {session_id}: {capture_timestamps.rewrite_mode}")
     outcome = finalize_session_transcription(
         chunks=chunks,
         mode=mode,
@@ -3667,7 +3718,7 @@ def make_post_process_instruction_checked(profile: str):
 
 
 def build_post_process_instruction_menu() -> pystray.Menu:
-    profile_names = (*POST_PROCESS_INSTRUCTION_PROFILES, "custom")
+    profile_names = ("clean_up", "concise", "light_touch", "custom")
     items = [
         *[
             pystray.MenuItem(
@@ -3815,15 +3866,36 @@ def build_punctuation_menu() -> pystray.Menu:
     )
 
 
-def build_menu() -> pystray.Menu:
+def select_recording_mode(mode: str) -> None:
+    if mode not in MODES:
+        return
+    with state.lock:
+        if (
+            (state.is_listening or state.session_start_pending)
+            and not state.should_stop
+            and not state.pending_start_stop_requested
+        ):
+            state.recording_rewrite_mode = mode
+    refresh_tray_menu()
+
+
+def build_recording_mode_menu() -> pystray.Menu:
+    def item(mode):
+        return pystray.MenuItem(
+            mode.title(),
+            lambda _icon, _item: select_recording_mode(mode),
+            checked=lambda _item: state.recording_rewrite_mode == mode,
+            enabled=lambda _item: state.is_listening or state.session_start_pending,
+            radio=True,
+        )
+
+    return pystray.Menu(*(item(mode) for mode in MODES))
+
+
+def build_settings_menu() -> pystray.Menu:
     return pystray.Menu(
         pystray.MenuItem(
-            "GPT cleanup",
-            toggle_post_processing,
-            checked=lambda _item: state.post_processing_enabled,
-        ),
-        pystray.MenuItem(
-            f"Cleanup settings: {current_post_process_model_label()}",
+            "Rewrite model & Tidy instructions",
             build_cleanup_settings_menu(),
         ),
         pystray.Menu.SEPARATOR,
@@ -3837,7 +3909,23 @@ def build_menu() -> pystray.Menu:
         ),
         pystray.MenuItem("Text & behavior", build_text_behavior_menu()),
         pystray.MenuItem("Shortcuts & startup", build_shortcuts_startup_menu()),
-        pystray.MenuItem("History", build_history_menu()),
+        pystray.MenuItem("Legacy history", build_history_menu()),
+    )
+
+
+def build_menu() -> pystray.Menu:
+    return pystray.Menu(
+        pystray.MenuItem(
+            lambda _item: "Mode: "
+            + (
+                state.recording_rewrite_mode.title()
+                if state.is_listening or state.session_start_pending
+                else "Raw"
+            ),
+            build_recording_mode_menu(),
+        ),
+        pystray.MenuItem("Transcript history", open_transcript_browser),
+        pystray.MenuItem("Settings", build_settings_menu()),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Restart", restart_app),
         pystray.MenuItem("Quit", quit_app),

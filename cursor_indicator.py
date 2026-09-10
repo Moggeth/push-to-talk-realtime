@@ -7,11 +7,12 @@ import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import ClassVar
 
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
-INDICATOR_SIZE = 76
+INDICATOR_SIZE = 88
 INDICATOR_TARGET_FPS = 120
 INDICATOR_IDLE_POLL_FPS = 30
 INDICATOR_SUPERSAMPLE_SCALE = 4
@@ -36,6 +37,7 @@ class CursorIndicatorSnapshot:
     visible: bool
     color: tuple[int, int, int, int]
     motion_speed: float = 1.0
+    label: str = ""
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class IndicatorVisual:
     frame: IndicatorFrame
     color: tuple[int, int, int, int]
     opacity: float
+    label: str = ""
 
 
 def indicator_frame(elapsed_s: float, motion_speed: float = 1.0) -> IndicatorFrame:
@@ -148,7 +151,7 @@ class IndicatorAnimator:
             arc_extent=base_frame.arc_extent,
             arc_width=base_frame.arc_width * (0.55 + 0.45 * geometry_scale),
         )
-        return IndicatorVisual(True, frame, self.current_color, opacity)
+        return IndicatorVisual(True, frame, self.current_color, opacity, effective_snapshot.label)
 
     def _hidden_visual(self) -> IndicatorVisual:
         return IndicatorVisual(
@@ -159,6 +162,11 @@ class IndicatorAnimator:
         )
 
 
+@lru_cache(maxsize=4)
+def indicator_label_font(scale: int):
+    return ImageFont.load_default(size=11 * scale)
+
+
 def render_indicator_image(
     frame: IndicatorFrame,
     color: tuple[int, int, int, int],
@@ -166,6 +174,7 @@ def render_indicator_image(
     size: int = INDICATOR_SIZE,
     scale: int = INDICATOR_SUPERSAMPLE_SCALE,
     opacity: float = 1.0,
+    label: str = "",
 ) -> Image.Image:
     render_size = size * scale
     center = render_size / 2
@@ -192,6 +201,17 @@ def render_indicator_image(
         fill=(*color[:3], round(color[3] * alpha_scale)),
         width=max(1, round(frame.arc_width * scale)),
     )
+    if label:
+        font = indicator_label_font(scale)
+        draw.text(
+            (center, render_size - 5 * scale),
+            label,
+            font=font,
+            anchor="mb",
+            fill=(255, 255, 255, round(255 * alpha_scale)),
+            stroke_width=scale,
+            stroke_fill=(20, 20, 20, round(230 * alpha_scale)),
+        )
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
@@ -525,6 +545,7 @@ class CursorActivityIndicator:
                 visual.frame,
                 visual.color,
                 opacity=visual.opacity,
+                label=visual.label,
             )
             pixels = premultiplied_bgra_bytes(image)
             ctypes.memmove(pixel_buffer, pixels, len(pixels))

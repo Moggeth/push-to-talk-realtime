@@ -50,12 +50,9 @@ Hotkeys
 
 Tray Menu
 ---------
-- GPT cleanup: one-click checkbox for the additional text-revision call; model and instructions live together under Cleanup settings.
-- Transcription: one radio list for all recorded models and GPT Live Transcribe. Choosing a recorded model also switches back to recorded mode.
-- Audio input: shared microphone/input device selection and device refresh.
-- Text & behavior: tap-to-toggle, paste suffix, punctuation, beeps, tooltip, and mute monitor.
-- Shortcuts & startup: dictation binding, work-log binding, and run-at-login.
-- History: opens the local transcript browser or legacy text log and controls legacy text logging.
+- Mode: Raw / Tidy / Fun for the current recording. Every new recording starts Raw; mode selection is disabled while idle.
+- Transcript history: opens the searchable local browser with raw and final text, copy and delete controls.
+- Settings: transcription model, audio input, rewrite model and Tidy instructions, text behavior, shortcuts/startup, and the optional legacy log.
 - Restart: restarts the systemd user service when managed by systemd, otherwise waits for the current tray instance to exit before relaunching the tracked entry point.
 - Quit: exits the tray app, or stops the systemd user service when managed by systemd.
 
@@ -65,12 +62,14 @@ Controls:
   - GPT Live Transcribe: default; streams one transcription session while recording and explicitly commits it when the trigger is released.
   - GPT Transcribe: recorded backup used when live dependencies are unavailable.
   - Saved GPT-4o Transcribe, GPT-4o Mini Transcribe, and Whisper selections migrate to GPT Transcribe.
-- GPT cleanup is a root checkbox that turns the additional text-revision call on or off immediately. It is off by default.
+- On Windows, hold Rear Edge (F13) and click right fingertip (currently Paste) to cycle Raw -> Tidy -> Fun -> Raw. No Swiftpoint profile edits are needed: the app consumes Ctrl+V during capture, including repeats and key-up. Keyboard Ctrl+V also cycles during capture; outside capture it pastes normally. Release Rear Edge to finish with the selected mode, even if right fingertip is still held. Ctrl+V must be sent after recording starts, not held before F13.
+- Raw skips GPT. Tidy removes transcription mistakes, filler and repeated thoughts using the selected instruction profile. Fun tidies with restrained exclamation marks and context-appropriate emojis while preserving meaning. The cursor ring names the current mode without changing microphone/system-audio colors.
+- Every non-empty raw transcript is committed to `transcripts.db` before rewriting, regardless of the legacy text-log switch. History preserves both versions. If saving fails, rewriting is skipped and raw output is retained. No recorded audio is retained by this archive.
 - GPT model and instructions:
   - Model: choose GPT-5.6 Luna (fast), Terra (balanced), or Sol (highest quality).
   - Instructions: choose Clean up speech, Make concise, Light touch, or Custom instructions.
   - Edit custom instructions...: appears in the instructions submenu and opens the local `post_process_instructions.txt` file. The app creates it on first use and rereads it for every custom-profile request, so edits do not require a restart.
-  - Applies to both pasted dictation and work-log entries. If cleanup is enabled with GPT Live Transcribe, live typing is withheld until the revised final text is ready.
+  - Model selection applies to Tidy and Fun; editable instructions apply to Tidy. Streaming recognition continues during capture, but output waits for release so late mode changes cannot leave duplicate text. The old persistent cleanup switch no longer controls recording mode.
 - Text output:
   - Suffix: None / Space / Newline (affects pasted dictation only).
   - Ensure terminal punctuation (adds "." if missing; enabled by default).
@@ -230,7 +229,7 @@ Environment variables:
 - `CURSOR_RECORDING_INDICATOR` (optional): `1` (default) shows the Windows recording ring around the pointer; set `0` to disable it.
 - `OPENAI_POST_PROCESS_MODEL` (optional): initial GPT post-processing model, default `gpt-5.6-luna`; tray selections are persisted in `settings.json`.
 - `OPENAI_POST_PROCESS_INSTRUCTIONS_PATH` (optional): custom instruction file path, default `post_process_instructions.txt` in the platform runtime-data directory.
-- `REALTIME_LIVE_TYPING` (optional): `1` (default) enables live delta typing for dictation, `0` disables it.
+- `REALTIME_LIVE_TYPING` (legacy): ignored for per-recording rewrite modes; output waits for release.
 - `PUSH_TO_TALK_SETTINGS_PATH` (optional): override the platform user-data path used for persisted tray settings.
 - `PUSH_TO_TALK_TRANSCRIPT_DB_PATH` (optional): override the always-on SQLite archive path (`transcripts.db` in the platform runtime-data directory by default).
 - `PUSH_TO_TALK_LOG_PATH` (optional): override the application log path.
@@ -301,7 +300,7 @@ Notes and tips
 - The warm microphone stream is considered stale after two seconds without an audio callback and is reopened automatically while idle. Recovery runs on a dedicated watchdog with bounded retry backoff, so a slow device open cannot stall tray animation or hotkey-listener checks.
 - While an earlier transcript is still processing, you can start a new recording; completed dictations are pasted in the order the recordings started.
 - Failed or aborted sessions release their output slot immediately. If an earlier API request remains stalled beyond the configured output wait, newer completed dictation proceeds and any late older result is discarded instead of pasting out of order.
-- Realtime live typing applies only to dictation mode and may need app focus to stay in the target field.
+- Realtime recognition streams during capture; delivery waits for the rewrite choice at release.
 - GPT Live Transcribe has no fallback model or local chunking path. A failed live session is logged instead of silently changing transcription engines. Realtime shutdown allows the configured ready and final-response deadlines, then explicitly cancels the worker; queue overflow is reported rather than silently ignored.
 - If realtime dependencies are missing, GPT Live Transcribe selection logs an install hint and stays on recorded mode.
 

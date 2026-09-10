@@ -26,6 +26,21 @@ def get_paste_modifier(system_name: str | None = None) -> pynput_keyboard.Key:
 
 
 def send_paste_shortcut(controller: pynput_keyboard.Controller | None = None) -> None:
+    if controller is None and platform.system() == "Windows":
+        import ctypes
+
+        from recording_modes import PASTE_EVENT_TAG
+
+        # Tag our output so a new recording cannot mistake it for the mode chord.
+        emit = ctypes.windll.user32.keybd_event
+        emit.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_ulong, ctypes.c_size_t]
+        emit(0x11, 0, 0, PASTE_EVENT_TAG)
+        try:
+            emit(0x56, 0, 0, PASTE_EVENT_TAG)
+            emit(0x56, 0, 2, PASTE_EVENT_TAG)
+        finally:
+            emit(0x11, 0, 2, PASTE_EVENT_TAG)
+        return
     keyboard_controller = controller or pynput_keyboard.Controller()
     modifier = get_paste_modifier()
     with keyboard_controller.pressed(modifier):

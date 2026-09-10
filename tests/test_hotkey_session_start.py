@@ -192,6 +192,7 @@ class HotkeySessionStartTests(unittest.TestCase):
             push_to_talk.state.pending_start_hotkey_tokens = key_tokens
             push_to_talk.state.pending_start_stop_requested = True
             push_to_talk.state.post_processing_enabled = True
+            push_to_talk.state.recording_rewrite_mode = "tidy"
             push_to_talk.state.dictation_history_enabled = False
 
         with (

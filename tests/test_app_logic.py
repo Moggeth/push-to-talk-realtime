@@ -869,7 +869,7 @@ def test_start_and_stop_keyboard_listener_manage_single_listener(monkeypatch):
     events = []
 
     class FakeListener:
-        def __init__(self, on_press, on_release):
+        def __init__(self, on_press, on_release, **kwargs):
             self.on_press = on_press
             self.on_release = on_release
             self.started = 0
@@ -911,7 +911,7 @@ def test_start_keyboard_listener_replaces_dead_listener(monkeypatch):
             return False
 
     class FakeListener:
-        def __init__(self, on_press, on_release):
+        def __init__(self, on_press, on_release, **kwargs):
             self.on_press = on_press
             self.on_release = on_release
             self.running = False
@@ -941,7 +941,7 @@ def test_keyboard_listener_rebind_clears_stale_key_state(monkeypatch):
     events = []
 
     class FakeListener:
-        def __init__(self, on_press, on_release):
+        def __init__(self, on_press, on_release, **kwargs):
             self.on_press = on_press
             self.on_release = on_release
 
@@ -1365,6 +1365,7 @@ def test_cursor_indicator_snapshot_uses_latched_audio_source_color():
     assert app.cursor_indicator_snapshot() == app.CursorIndicatorSnapshot(
         True,
         app.TRAY_COLOR_SYSTEM_AUDIO_LISTENING,
+        label="Raw",
     )
 
     with app.state.lock:
@@ -1373,6 +1374,7 @@ def test_cursor_indicator_snapshot_uses_latched_audio_source_color():
     assert app.cursor_indicator_snapshot() == app.CursorIndicatorSnapshot(
         True,
         app.TRAY_COLOR_LISTENING,
+        label="Raw",
     )
 
 
@@ -2067,14 +2069,9 @@ def test_menu_builders_include_expected_top_level_items(monkeypatch):
         "Mute monitor",
     ]
     assert [item.text for item in menu] == [
-        "GPT cleanup",
-        "Cleanup settings: GPT-5.6 Luna (fast)",
-        "- - - -",
-        "Transcription: GPT Transcribe",
-        "Audio input: USB Mic",
-        "Text & behavior",
-        "Shortcuts & startup",
-        "History",
+        "Mode: Raw",
+        "Transcript history",
+        "Settings",
         "- - - -",
         "Restart",
         "Quit",

@@ -341,3 +341,12 @@ Threaded tray tests must isolate every worker started by `tray_setup` and stop i
 - Set `CURSOR_RECORDING_INDICATOR=0` and restart. Expected: recording behavior is unchanged and no pointer ring appears.
 
 - With the work-log key empty, pressing/releasing F14 must not create a capture or a delayed work-log thread. F13 dictation remains active. Covered by `test_disabled_worklog_does_not_handle_f14`.
+
+29) Per-recording Raw / Tidy / Fun
+- `tests/test_recording_modes.py` covers reset to Raw, cycling during pending startup and capture, immutable mode after release, repeat suppression, release after recording ends, passthrough outside recording, and tagged application output. It checks raw archival before either rewrite profile even with legacy logging disabled.
+- `python tests/manual_mode_chord.py` is an opt-in native Windows smoke test. It briefly focuses its own text field, temporarily replaces/restores the text clipboard, and checks suppression, all three modes, ordinary Paste and tagged application Paste. It makes no audio or API requests. Do not use the keyboard/mouse during its approximately four-second run.
+- Physically hold Rear Edge and click right fingertip once/twice/three times: cursor label must read Tidy/Fun/Raw. Hold fingertip down: no further cycling. Release Rear Edge first, then fingertip: capture must stop without a stray paste. Repeat with Shift system-audio capture. Start another recording: Raw again.
+- Open Transcript history and compare raw/final versions of a Tidy and a Fun capture. API failures must retain raw output; archive failures must skip rewriting. Settings retains the user's selected model and custom Tidy instructions.
+- Native suppression must use `win32_event_filter` and `suppress_event`, not a normal `on_press` callback (which cannot prevent Paste reaching the application). App-generated Paste carries `PASTE_EVENT_TAG` so overlapping recordings cannot reinterpret their own output as a mode change.
+- Earlier tests assumed persistent cleanup and the old menu layout; update those expectations when testing per-recording mode selection, rather than restoring the obsolete behavior.
+- Mode-label pixel bounds are tested for Raw/Tidy/Fun. The first 76-pixel surface clipped antialiasing below the label; an 88-pixel transparent surface with a five-pixel bottom inset preserves the existing ring radius and gives the larger label room.
