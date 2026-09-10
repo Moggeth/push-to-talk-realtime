@@ -330,6 +330,7 @@ Cursor activity transitions share one stateful phase accumulator. Recording-to-t
 Threaded tray tests must isolate every worker started by `tray_setup` and stop it in fixture teardown. The watchdog extraction initially exposed one test that mocked the animation worker but not the new microphone worker; the faster repeatable pattern is to mock the worker start in setup tests and call its stop helper in the shared fixture.
 
 28) Windows cursor recording indicator
+- During an active overlay smoke test, hide its window with `ShowWindow(hwnd, 0)`. It must become visible on the next frame without stealing focus. Overlay startup logs `Alpha overlay ready`; unexpected shutdowns retry after five seconds.
 - Hold the dictation trigger and move the pointer across multiple windows. Expected: a thin red ring tracks the pointer without stealing focus or blocking clicks.
 - Watch the first 160 ms after pressing the trigger. Expected: the ring expands smoothly from the cursor point instead of appearing at full size.
 - Hold Shift before the dictation trigger. Expected: the ring is blue for the full latched system-audio capture, including after Shift is released.

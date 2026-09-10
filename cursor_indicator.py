@@ -248,16 +248,16 @@ class CursorActivityIndicator:
         self.thread = None
 
     def _run(self) -> None:
-        try:
-            self._run_windows_message_loop()
-        except Exception as exc:  # the recorder must never depend on overlay availability
-            self.log(
-                "[Cursor indicator] Disabled after initialization failure:",
-                exc,
-                traceback.format_exc(),
-            )
-        finally:
-            self.hwnd = 0
+        while not self.stop_event.is_set():
+            try:
+                self._run_windows_message_loop()
+            except Exception as exc:  # overlay failures must not interrupt recording
+                self.log("[Cursor indicator] Overlay failed:", exc, traceback.format_exc())
+            finally:
+                self.hwnd = 0
+            if self.stop_event.wait(5.0):
+                break
+            self.log("[Cursor indicator] Recreating overlay after window shutdown.")
 
     def _run_windows_message_loop(self) -> None:
         import ctypes
@@ -372,6 +372,18 @@ class CursorActivityIndicator:
         user32.DestroyWindow.restype = wintypes.BOOL
         user32.IsWindow.argtypes = [wintypes.HWND]
         user32.IsWindow.restype = wintypes.BOOL
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        user32.IsWindowVisible.restype = wintypes.BOOL
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
         user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
         user32.ShowWindow.restype = wintypes.BOOL
         user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
@@ -532,8 +544,9 @@ class CursorActivityIndicator:
                 0x00000002,  # ULW_ALPHA
             ):
                 raise ctypes.WinError()
-            if not shown:
-                user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+            if not shown or not user32.IsWindowVisible(hwnd):
+                # Recover when the desktop hides or changes the order of tool windows.
+                user32.SetWindowPos(hwnd, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x0053)
                 shown = True
             return True
 
@@ -543,6 +556,7 @@ class CursorActivityIndicator:
         winmm.timeEndPeriod.argtypes = [wintypes.UINT]
         winmm.timeEndPeriod.restype = wintypes.UINT
         high_resolution_timer = False
+        self.log("[Cursor indicator] Alpha overlay ready.")
         try:
             message = wintypes.MSG()
             next_frame_at = time.perf_counter()

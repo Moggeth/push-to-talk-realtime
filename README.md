@@ -11,6 +11,7 @@ although external launchers can still start it by pointing at this checkout.
 
 Features
 --------
+- Cursor overlay recovery: externally hidden windows are restored on the next active frame. An unexpected overlay shutdown retries after five seconds; startup and failures are recorded in the app log.
 - Push-to-talk dictation: record and paste on release.
 - Transcript history: dictations are saved to `work_log.txt` with date/time stamps by default, so each person can review what they said later.
 - Always-on transcript archive: every non-empty dictation and work-log transcript is stored in local SQLite with both the raw speech-to-text result and final output.
