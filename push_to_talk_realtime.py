@@ -40,6 +40,13 @@ from pynput import keyboard as pynput_keyboard
 import desktop_bootstrap  # noqa: F401
 from cursor_indicator import CursorActivityIndicator, CursorIndicatorSnapshot
 from recording_modes import MODES, PasteCycleFilter
+from selected_text_tidy import (
+    SelectedTextTidyDependencies,
+    SelectedTextTidyFilter,
+    SelectedTextTidyJob,
+    wait_for_windows_f15_release,
+    windows_last_input,
+)
 from history_store import append_history_entry as append_history_entry_core
 from platform_input import (
     PasteTarget,
@@ -189,6 +196,22 @@ POST_PROCESS_MODEL_LABELS = {
     "gpt-5.6-sol": "GPT-5.6 Sol (highest quality)",
 }
 DEFAULT_POST_PROCESS_MODEL = os.getenv("OPENAI_POST_PROCESS_MODEL", "gpt-5.6-luna").strip()
+SELECTED_TEXT_TIDY_MODEL = os.getenv("SELECTED_TEXT_TIDY_MODEL", "gpt-5.6-luna").strip()
+SELECTED_TEXT_TIDY_INSTRUCTION = (
+    "Rewrite as clean, professional, natural notes. Remove filler, repetition, and false starts "
+    "while preserving every fact, name, request, decision, action, intention, and uncertainty. "
+    "Organize the content in a logical order and do not invent or overstate anything. Use concise "
+    "paragraphs by default. Use short bullet points only when the content naturally contains "
+    "multiple distinct items, actions, decisions, observations, steps, or follow-ups; never force "
+    "bullets for a single thought. Return only the cleaned note."
+)
+SELECTED_TEXT_TIDY_WRAPPER = (
+    "Transform the supplied speech transcript according to the user's output instruction. Return "
+    "only the final transformed text, with no preface, quotation marks, or commentary. Preserve "
+    "the source meaning and facts unless the instruction explicitly requests a different language, "
+    "format, summary, creative rendering, or direct response. Never introduce unsupported personal, "
+    "operational, or incident details.\n\nUser output instruction:\n"
+)
 POST_PROCESS_INSTRUCTION_PROFILES = {
     "fun": (
         "Tidy this speech-to-text message, removing filler, repeated thoughts and false starts. "
@@ -495,6 +518,7 @@ state = SessionState()
 shutdown_event = threading.Event()
 keyboard_listener: pynput_keyboard.Listener | None = None
 keyboard_listener_lock = threading.Lock()
+selected_text_tidy_job: SelectedTextTidyJob | None = None
 input_listener_watchdog_thread: threading.Thread | None = None
 input_listener_watchdog_stop = threading.Event()
 INPUT_LISTENER_BOOT_REBIND_DELAYS_S = (8.0, 30.0, 90.0)
@@ -1044,6 +1068,118 @@ def post_process_transcript(text: str, model: str, instructions: str) -> str:
     return (response.output_text or "").strip()
 
 
+def selected_text_tidy_instructions() -> str:
+    """Android's uncategorized Tidy prompt and Luna wrapper, kept byte-for-byte equivalent."""
+    return SELECTED_TEXT_TIDY_WRAPPER + SELECTED_TEXT_TIDY_INSTRUCTION
+
+
+def selected_text_clipboard_sequence() -> int | None:
+    if not IS_WINDOWS:
+        return None
+    try:
+        import ctypes
+
+        return int(ctypes.windll.user32.GetClipboardSequenceNumber())
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+def copy_selected_text_shortcut() -> None:
+    controller = pynput_keyboard.Controller()
+    with output_keyboard_lock, controller.pressed(pynput_keyboard.Key.ctrl):
+        controller.press("c")
+        controller.release("c")
+
+
+def selected_text_tidy_busy() -> bool:
+    with state.lock:
+        return bool(
+            state.is_listening
+            or state.session_start_pending
+            or state.is_transcribing
+            or state.is_post_processing
+        )
+
+
+def notify_selected_text_tidy(message: str) -> None:
+    icon = tray_icon
+    if icon is not None:
+        with suppress(Exception):
+            icon.notify(message, "Push-to-talk")
+    log(f"[Selected Tidy] {message}")
+
+
+def transform_selected_text_tidy(text: str) -> str:
+    response = openai_client_with_timeout(POST_PROCESS_TIMEOUT_S).responses.create(
+        model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-luna",
+        instructions=selected_text_tidy_instructions(),
+        input=text,
+        reasoning={"effort": "none"},
+        max_output_tokens=4096,
+        store=False,
+    )
+    if getattr(response, "status", None) != "completed" or getattr(
+        response, "incomplete_details", None
+    ):
+        raise ValueError("The rewrite response was incomplete")
+    output = (getattr(response, "output_text", "") or "").strip()
+    if not output:
+        raise ValueError("The rewrite response was blank")
+    return output
+
+
+def archive_selected_text_tidy_raw(text: str) -> int | None:
+    return archive_raw_transcript(
+        mode="selected_text_tidy",
+        audio_source="selected_text",
+        transcription_engine="responses",
+        transcription_model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-luna",
+        post_processing_enabled=True,
+        post_process_model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-luna",
+        instruction_profile="android_uncategorized_tidy",
+        instructions=selected_text_tidy_instructions(),
+        raw_text=text,
+    )
+
+
+def get_selected_text_tidy_job() -> SelectedTextTidyJob:
+    global selected_text_tidy_job
+    if selected_text_tidy_job is None:
+        selected_text_tidy_job = SelectedTextTidyJob(
+            SelectedTextTidyDependencies(
+                capture_target=capture_paste_target,
+                foreground_matches=foreground_matches_paste_target,
+                last_input=windows_last_input,
+                wait_for_release=wait_for_windows_f15_release,
+                clipboard_sequence=selected_text_clipboard_sequence,
+                clipboard_read=pyperclip.paste,
+                clipboard_write=pyperclip.copy,
+                copy_selection=copy_selected_text_shortcut,
+                paste=send_paste_shortcut,
+                transform=transform_selected_text_tidy,
+                archive_raw=archive_selected_text_tidy_raw,
+                archive_final=lambda entry_id,
+                final,
+                status,
+                error: transcript_store.finalize_entry(
+                    entry_id, final_text=final, post_process_status=status, post_process_error=error
+                ),
+                feedback_started=mark_post_processing_started,
+                feedback_finished=mark_post_processing_finished,
+                notify=notify_selected_text_tidy,
+                busy=selected_text_tidy_busy,
+                log=log,
+            )
+        )
+    return selected_text_tidy_job
+
+
+def start_selected_text_tidy() -> bool:
+    if not IS_WINDOWS or not OPENAI_API_KEY:
+        return False
+    return get_selected_text_tidy_job().start()
+
+
 def acquire_app_instance_guard() -> AppInstanceGuard | None:
     if not IS_WINDOWS:
         return AppInstanceGuard()
@@ -1407,13 +1543,18 @@ def create_keyboard_listener():
     import ctypes
 
     chord = PasteCycleFilter(cycle_recording_mode)
+    selected_tidy = SelectedTextTidyFilter(start_selected_text_tidy)
 
     def event_filter(msg, data):
         if msg not in (0x100, 0x101, 0x104, 0x105):
             return True
+        down = msg in (0x100, 0x104)
+        if selected_tidy.consume(data.vkCode, down):
+            listener.suppress_event()
+            return True
         if chord.consume(
             data.vkCode,
-            msg in (0x100, 0x104),
+            down,
             bool(ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000),
             int(data.dwExtraInfo or 0),
         ):
@@ -2327,6 +2468,8 @@ def begin_session_start(
     stop_hotkey_tokens = session_stop_hotkey_tokens(mode, hotkey_tokens)
     requested_at = time.monotonic()
     with state.lock:
+        if selected_text_tidy_job is not None and selected_text_tidy_job.is_running():
+            return False
         if state.is_listening or state.session_start_pending:
             return False
         state.session_start_pending = True
@@ -3006,6 +3149,9 @@ def on_press(key):
     key_name = get_key_name(key)
     if not key_name:
         return
+    # F15 is reserved for the selected-text Tidy hook and is consumed on Windows.
+    if key_name == "F15" and IS_WINDOWS:
+        return
 
     double_tap = False
     dictation_start = False
@@ -3018,6 +3164,8 @@ def on_press(key):
     worklog_device_index: int | None = None
     worklog_device_label = ""
     with state.lock:
+        if selected_text_tidy_job is not None and selected_text_tidy_job.is_running():
+            return
         state.pressed_keys.add(key_name)
         if is_shift_key_name(key_name):
             state.shift_keys_down.add(key_name)
@@ -3110,6 +3258,8 @@ def on_press(key):
 def on_release(key):
     key_name = get_key_name(key)
     if not key_name:
+        return
+    if key_name == "F15" and IS_WINDOWS:
         return
 
     now = time.monotonic()
