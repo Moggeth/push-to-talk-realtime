@@ -196,7 +196,7 @@ POST_PROCESS_MODEL_LABELS = {
     "gpt-5.6-sol": "GPT-5.6 Sol (highest quality)",
 }
 DEFAULT_POST_PROCESS_MODEL = os.getenv("OPENAI_POST_PROCESS_MODEL", "gpt-5.6-luna").strip()
-SELECTED_TEXT_TIDY_MODEL = os.getenv("SELECTED_TEXT_TIDY_MODEL", "gpt-5.6-luna").strip()
+SELECTED_TEXT_TIDY_MODEL = os.getenv("SELECTED_TEXT_TIDY_MODEL", "gpt-5.6-terra").strip()
 SELECTED_TEXT_TIDY_INSTRUCTION = (
     "Rewrite as clean, professional, natural notes. Remove filler, repetition, and false starts "
     "while preserving every fact, name, request, decision, action, intention, and uncertainty. "
@@ -1111,7 +1111,7 @@ def notify_selected_text_tidy(message: str) -> None:
 
 def transform_selected_text_tidy(text: str) -> str:
     response = openai_client_with_timeout(POST_PROCESS_TIMEOUT_S).responses.create(
-        model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-luna",
+        model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-terra",
         instructions=selected_text_tidy_instructions(),
         input=text,
         reasoning={"effort": "none"},
@@ -1133,9 +1133,9 @@ def archive_selected_text_tidy_raw(text: str) -> int | None:
         mode="selected_text_tidy",
         audio_source="selected_text",
         transcription_engine="responses",
-        transcription_model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-luna",
+        transcription_model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-terra",
         post_processing_enabled=True,
-        post_process_model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-luna",
+        post_process_model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-terra",
         instruction_profile="android_uncategorized_tidy",
         instructions=selected_text_tidy_instructions(),
         raw_text=text,

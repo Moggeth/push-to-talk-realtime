@@ -4,7 +4,7 @@ The Windows F15 hook starts one background selected-text rewrite only after the 
 
 The job checks exact focus before copying and records a `GetLastInputInfo` snapshot after Copy settles. Replacement requires unchanged field, input and clipboard, plus a fresh copy equal to the submitted selection. Failed safety checks retain both versions in Transcript history and copy the result only if the job still owns the clipboard. API/copy failures preserve the document and restore the previous text clipboard only while ownership is retained. Arbitrary rich clipboard formats are not restored. Focus checks and paste are sequential Windows operations, not an atomic transaction.
 
-The dedicated profile uses the Android uncategorized Tidy instruction and Luna wrapper, `reasoning.effort: none`, `max_output_tokens: 4096`, and `store: false`. It is intentionally independent of desktop dictation Tidy preferences; its default is GPT-5.6 Luna, with an optional `SELECTED_TEXT_TIDY_MODEL` override.
+The dedicated profile uses the Android uncategorized Tidy instruction and Luna wrapper, `reasoning.effort: none`, `max_output_tokens: 4096`, and `store: false`. It is intentionally independent of desktop dictation Tidy preferences; its default is GPT-5.6 Terra (updated at the user's request), with an optional `SELECTED_TEXT_TIDY_MODEL` override.
 
 ## Run and recovery
 
@@ -30,3 +30,6 @@ Start with `python start_push_to_talk.py`; tray Restart loads changes and Quit s
 - Profile backup 0.038 seconds; structural comparison 0.085 seconds. Removing the single added nested record makes before/after configuration identical. HID usage 106 is F15.
 - Z3 reconnected at 13:35:15 local time. Swiftpoint logged saveToRAM at .657 and saveToFlash at .924. The nested binding was saved to the PC earlier at 13:30:13. Physical finger-pressure activation still requires a user check; the host F15 path was verified live.
 - App reload commands took 0.55 and 0.53 seconds. A duplicate launcher exited through the single-instance guard; one updated tray instance remained.
+
+## Terra model update
+Selected-text Tidy now defaults to gpt-5.6-terra, including blank-override fallbacks and archive metadata. Android wording and request parameters are preserved. Verified 19 focused tests (1.39 s), Ruff lint/format, and effective model import. Measured steps: discovery 0.189 s; configuration inspection 0.543 s; edit/test/lint 2.255 s; runtime inspection 0.919 s. No local or user/machine model override was present.

@@ -189,7 +189,7 @@ def test_selected_tidy_request_rejects_truncated_response(monkeypatch):
         app.transform_selected_text_tidy("input")
 
 
-def test_selected_tidy_request_uses_android_luna_profile(monkeypatch):
+def test_selected_tidy_request_uses_terra_with_android_tidy_prompt(monkeypatch):
     request = {}
 
     class Response:
@@ -206,6 +206,7 @@ def test_selected_tidy_request_uses_android_luna_profile(monkeypatch):
 
     monkeypatch.setattr(app, "openai_client_with_timeout", lambda _: Client())
     assert app.transform_selected_text_tidy("input") == "rewritten"
+    assert request["model"] == "gpt-5.6-terra"
     assert request["instructions"] == app.selected_text_tidy_instructions()
     assert request["reasoning"] == {"effort": "none"}
     assert request["max_output_tokens"] == 4096
