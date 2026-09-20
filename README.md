@@ -312,6 +312,7 @@ Notes and tips
 - The warm microphone stream is considered stale after two seconds without an audio callback and is reopened automatically while idle. Recovery runs on a dedicated watchdog with bounded retry backoff, so a slow device open cannot stall tray animation or hotkey-listener checks.
 - While an earlier transcript is still processing, you can start a new recording; completed dictations are pasted in the order the recordings started.
 - Failed or aborted sessions release their output slot immediately. If an earlier API request remains stalled beyond the configured output wait, newer completed dictation proceeds and any late older result is discarded instead of pasting out of order.
+- Unexpected preparation errors also release the recording slot. Capture monitoring exits on shutdown or when its session is no longer active. Completed audio buffers are handed to transcription without duplicating every PCM block, and streaming delta text is not retained when live typing is disabled.
 - Realtime recognition streams during capture; delivery waits for the rewrite choice at release.
 - GPT Live Transcribe has no fallback model or local chunking path. A failed live session is logged instead of silently changing transcription engines. Realtime shutdown allows the configured ready and final-response deadlines, then explicitly cancels the worker; queue overflow is reported rather than silently ignored.
 - If realtime dependencies are missing, GPT Live Transcribe selection logs an install hint and stays on recorded mode.

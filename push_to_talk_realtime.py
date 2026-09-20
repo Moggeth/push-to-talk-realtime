@@ -2580,7 +2580,12 @@ def monitor_active_session(session_id: int) -> None:
     while True:
         time.sleep(0.02)
         with state.lock:
-            should_stop = state.should_stop and state.active_session_id == session_id
+            should_stop = (
+                shutdown_event.is_set()
+                or state.active_session_id != session_id
+                or not state.is_listening
+                or state.should_stop
+            )
             monitor_enabled = state.monitor_enabled
             last_audio_time = state.last_audio_time
             muted_warning = state.muted_warning
@@ -2900,8 +2905,14 @@ def start_listening(
         with state.lock:
             _clear_pending_session_start_locked()
         return
-    enforce_transcription_engine_dependencies()
-    paste_target = capture_paste_target() if mode == MODE_DICTATION else None
+    try:
+        enforce_transcription_engine_dependencies()
+        paste_target = capture_paste_target() if mode == MODE_DICTATION else None
+    except Exception as exc:
+        with state.lock:
+            _clear_pending_session_start_locked()
+        log("[Session] Preparation failed; ready for the next recording:", exc)
+        return
     if paste_target is not None:
         log(
             "[Paste] Remembered target "
@@ -2951,10 +2962,10 @@ def start_listening(
         realtime_cancel_event = threading.Event()
 
         def on_delta_text(delta_text: str) -> None:
-            with realtime_delta_lock:
-                realtime_delta_parts.append(delta_text)
             if not live_typing_enabled:
                 return
+            with realtime_delta_lock:
+                realtime_delta_parts.append(delta_text)
             try:
                 type_text_direct(delta_text)
             except Exception as exc:  # pylint: disable=broad-except
@@ -2982,20 +2993,20 @@ def start_listening(
             assert realtime_audio_buffer is not None
             realtime_audio_buffer.put(chunk)
 
-    recorder, recorder_retries = build_session_recorder(
-        audio_source,
-        device_index,
-        label_text,
-        record_buffer,
-        buffer_lock,
-        on_audio_chunk,
-    )
-    started, _active_index, active_label = start_recorder_with_fallback(
-        recorder,
-        label,
-        label_text,
-        retries=recorder_retries,
-    )
+    recorder = None
+    try:
+        recorder, recorder_retries = build_session_recorder(
+            audio_source, device_index, label_text, record_buffer, buffer_lock, on_audio_chunk
+        )
+        started, _active_index, active_label = start_recorder_with_fallback(
+            recorder, label, label_text, retries=recorder_retries
+        )
+    except Exception as exc:
+        if recorder is not None:
+            with suppress(Exception):
+                recorder.stop()
+        log(f"[Session {session_id}] Recorder preparation failed:", exc)
+        started = False
     stream_ready_at = time.monotonic()
     if not started:
         cancel_realtime_worker(
@@ -3060,7 +3071,8 @@ def start_listening(
             f"({BLOCK_DUR_S * 1000:.0f} ms each)."
         )
     with buffer_lock:
-        chunks = [chunk.copy() for chunk in record_buffer]
+        # Capture is stopped; chunks are immutable from here, so avoid duplicating PCM.
+        chunks = record_buffer.copy()
     post_processing_enabled = capture_timestamps.rewrite_mode != "raw"
     if capture_timestamps.rewrite_mode == "fun":
         post_process_instruction_profile = "fun"

@@ -128,7 +128,7 @@ def run_live_session(
     committed = False
     sent_audio = False
     final_deadline = 0.0
-    partials_by_item: dict[str, list[str]] = {}
+    items_with_deltas: set[str] = set()
     completed_by_item: dict[str, str] = {}
 
     while True:
@@ -193,7 +193,7 @@ def run_live_session(
             item_id = str(event.get("item_id", "") or "default")
             delta = str(event.get("delta", "") or "")
             if delta:
-                partials_by_item.setdefault(item_id, []).append(delta)
+                items_with_deltas.add(item_id)
                 if on_delta is not None:
                     on_delta(delta)
             continue
@@ -201,7 +201,7 @@ def run_live_session(
             item_id = str(event.get("item_id", "") or "default")
             transcript = str(event.get("transcript", "") or "").strip()
             completed_by_item[item_id] = transcript
-            if on_delta is not None and transcript and not partials_by_item.get(item_id):
+            if on_delta is not None and transcript and item_id not in items_with_deltas:
                 on_delta(transcript)
             if committed:
                 return " ".join(text for text in completed_by_item.values() if text).strip()
