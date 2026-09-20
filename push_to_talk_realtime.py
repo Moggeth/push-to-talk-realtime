@@ -1957,13 +1957,21 @@ class AudioRecorder:
             device=self.device_index,
             callback=self._callback,
         )
-        self.stream.start()
+        try:
+            self.stream.start()
+        except Exception:
+            with suppress(Exception):
+                self.stream.close()
+            self.stream = None
+            raise
 
     def stop(self):
         try:
             if self.stream:
-                self.stream.stop()
-                self.stream.close()
+                try:
+                    self.stream.stop()
+                finally:
+                    self.stream.close()
         finally:
             self.stream = None
 
@@ -2064,7 +2072,9 @@ class WarmMicrophoneCapture:
         with self.stream_lock:
             if self.is_ready_for(device_index):
                 return True
-            self._stop_stream()
+            if not self._stop_stream(only_if_idle=True):
+                return False
+            stream = None
             try:
                 stream = sd.InputStream(
                     samplerate=SAMPLE_RATE,
@@ -2076,6 +2086,9 @@ class WarmMicrophoneCapture:
                 )
                 stream.start()
             except Exception as exc:  # pylint: disable=broad-except
+                if stream is not None:
+                    with suppress(Exception):
+                        stream.close()
                 log("[Audio] Microphone pre-roll unavailable; using normal startup:", exc)
                 return False
             with self.lock:
@@ -2085,12 +2098,15 @@ class WarmMicrophoneCapture:
                 self.pre_roll.clear()
             log(
                 f"[Audio] Microphone pre-roll ready ({MICROPHONE_PRE_ROLL_MS} ms, "
-                f"device={device_index if device_index is not None else 'default'})."
+                f"requested={device_index if device_index is not None else 'default'}, "
+                f"opened-device={getattr(stream, 'device', device_index)})."
             )
             return True
 
-    def _stop_stream(self) -> None:
+    def _stop_stream(self, *, only_if_idle: bool = False) -> bool:
         with self.lock:
+            if only_if_idle and self.active_token is not None:
+                return False
             stream = self.stream
             self.stream = None
             self.device_index = None
@@ -2105,6 +2121,7 @@ class WarmMicrophoneCapture:
                 stream.stop()
             with suppress(Exception):
                 stream.close()
+        return True
 
     def stop(self) -> None:
         with self.stream_lock:
@@ -2117,10 +2134,10 @@ class WarmMicrophoneCapture:
         buffer_lock: threading.Lock,
         on_chunk: Callable[[np.ndarray], None] | None,
     ) -> tuple[object, int]:
-        if not self.is_ready_for(device_index):
-            raise RuntimeError("warm microphone stream is not ready")
         token = object()
         with self.lock:
+            if not self.is_ready_for(device_index):
+                raise RuntimeError("warm microphone stream is not ready")
             if self.active_token is not None:
                 raise RuntimeError("warm microphone stream is already in use")
             pre_roll_chunks = [chunk.copy() for chunk in self.pre_roll]
@@ -4287,7 +4304,7 @@ def maintain_warm_microphone_capture() -> bool:
     if not MICROPHONE_PRE_ROLL_ENABLED:
         return True
     with state.lock:
-        if state.is_listening:
+        if state.is_listening or state.session_start_pending:
             return True
         microphone_device_index = state.dictation_device_index
     if warm_microphone_capture.is_ready_for(microphone_device_index):
@@ -4299,7 +4316,11 @@ def maintain_warm_microphone_capture() -> bool:
 def warm_microphone_watchdog_loop() -> None:
     delay_s = 0.0
     while not shutdown_event.is_set() and not warm_microphone_watchdog_stop.wait(delay_s):
-        recovered = maintain_warm_microphone_capture()
+        try:
+            recovered = maintain_warm_microphone_capture()
+        except Exception as exc:  # pylint: disable=broad-except
+            log("[Audio] Microphone watchdog recovery failed; retrying:", exc)
+            recovered = False
         delay_s = (
             WARM_MICROPHONE_HEALTH_CHECK_INTERVAL_S
             if recovered

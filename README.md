@@ -166,6 +166,16 @@ Troubleshooting
   the next press also uses the normal recorder if recovery has not completed.
 - The current process, selected engine, listener startup, stream recovery, and
   capture timing can be checked in `push_to_talk_realtime.log`.
+- Failed microphone starts close their partial stream before retrying. Closing
+  still runs if stopping a disconnected stream fails. The microphone watchdog
+  logs unexpected recovery exceptions and retries with bounded backoff; it does
+  not reopen a stream attached to a recording. Successful pre-roll startup logs
+  both the requested and opened device indexes.
+- Multiple connected microphones are supported, but `System default input`
+  leaves input selection to the audio backend. Selecting a named microphone in
+  Settings makes the intended source explicit. Repeated device changes or a
+  driver call that never returns may still need a restart; recovery threads do
+  not forcibly interrupt native driver calls.
 
 Development
 -----------

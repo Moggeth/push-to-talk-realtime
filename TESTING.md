@@ -317,6 +317,11 @@ CI now runs:
 
 Development note: after structural Python edits, run `ruff format` on the changed files as the final step after the last patch, then run `ruff check` and `ruff format --check`. This avoids repeating the import-order and wrapping-only failures seen during the runtime-path and watchdog extractions; behavioral tests had already passed in the first case, and the second check stopped before tests.
 
+Microphone recovery regression checks (2026-09-20):
+- `tests/test_audio_recovery.py` injects failed warm/normal stream starts, stop errors, a watchdog exception, pending capture startup, and a stale stream with an attached consumer. Verify close-before-retry, close-even-after-stop-failure, bounded retry, and preservation of the active recording token.
+- When investigating restarts, filter runtime logs for audio/startup/capture metrics rather than dumping transcript text. Windows exposes each physical microphone through multiple host APIs; the number of device-list entries is not the number of physical microphones.
+- Keep the readiness check and consumer attachment under the same capture lock. Background reopening must atomically refuse an attached consumer, even if the stream became stale between the watchdog's state check and acquisition of the stream lock.
+
 For a new Python module, use `ruff check --fix <file>` before the final `ruff format`; formatting alone does not organize imports. The cursor-indicator check initially stopped on that mechanical distinction before tests ran.
 
 Do not create a Tk root on a worker thread for this overlay. The first live smoke test rendered correctly but emitted `Tcl_AsyncDelete` during interpreter cleanup. The maintained implementation uses a native Win32 window and message loop in its worker thread, which starts and shuts down without Tcl thread ownership.
