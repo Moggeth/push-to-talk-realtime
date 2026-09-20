@@ -329,4 +329,6 @@ button keeps the traveler in place while the ring tightens and accelerates in or
 GPT rewriting uses magenta with a second inner arc. Successful output gives a short
 green expansion before retracting; output errors show a brief stationary warning.
 Silence simply retracts, and a new recording takes priority over previous results.
+Quick releases retract from the ring's current size; starting again during collapse
+smoothly reverses it instead of flashing a full-size ring.
 The overlay remains click-through, targets 120 Hz while visible, and idles at 30 Hz.

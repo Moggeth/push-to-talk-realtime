@@ -108,6 +108,10 @@ class IndicatorAnimator:
         self.mode_changed_at = 0.0
         self.activity = "recording"
         self.activity_started_at = 0.0
+        self.geometry_scale = 0.08
+        self.opacity = 0.0
+        self.transition_scale = 0.08
+        self.transition_opacity = 0.0
 
     def update(self, snapshot: CursorIndicatorSnapshot, now: float) -> IndicatorVisual:
         previous_at = self.last_at
@@ -125,6 +129,14 @@ class IndicatorAnimator:
                 self.audio_level = 0.0
                 self.radius_offset = 0.0
                 self.mode = self.previous_mode = snapshot.mode
+                self.activity = snapshot.activity
+                self.activity_started_at = now
+                self.geometry_scale = 0.08
+                self.opacity = 0.0
+            if not self.target_visible:
+                self.intro_started_at = now
+                self.transition_scale = self.geometry_scale
+                self.transition_opacity = self.opacity
             if snapshot.mode != self.mode:
                 self.previous_mode = self.mode
                 self.mode = snapshot.mode
@@ -137,6 +149,8 @@ class IndicatorAnimator:
         elif self.target_visible:
             self.target_visible = False
             self.outro_started_at = now
+            self.transition_scale = self.geometry_scale
+            self.transition_opacity = self.opacity
 
         effective_snapshot = snapshot if snapshot.visible else self.last_snapshot
         if not self.present or effective_snapshot is None:
@@ -157,16 +171,20 @@ class IndicatorAnimator:
         if self.target_visible:
             progress = min(1.0, max(0.0, (now - self.intro_started_at) / INTRO_DURATION_S))
             eased = 1.0 - (1.0 - progress) ** 3
-            geometry_scale = 0.08 + 0.92 * eased
-            opacity = eased
+            geometry_scale = self.transition_scale + (1.0 - self.transition_scale) * eased
+            opacity = self.transition_opacity + (1.0 - self.transition_opacity) * eased
         else:
             progress = min(1.0, max(0.0, (now - self.outro_started_at) / OUTRO_DURATION_S))
             if progress >= 1.0:
                 self.present = False
                 self.last_snapshot = None
                 return self._hidden_visual()
-            geometry_scale = 1.0 - progress**3
-            opacity = 1.0 - progress
+            geometry_scale = self.transition_scale * (1.0 - progress**3)
+            opacity = self.transition_opacity * (1.0 - progress)
+
+        # Reversals begin at the last displayed envelope, including partial entry/exit.
+        self.geometry_scale = geometry_scale
+        self.opacity = opacity
 
         base_frame = indicator_frame(now - self.cycle_started_at)
         level = effective_snapshot.audio_level

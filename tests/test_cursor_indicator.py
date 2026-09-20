@@ -177,3 +177,60 @@ def test_rewriting_and_error_have_distinct_geometry():
     for activity in ("rewriting", "error"):
         special = render_indicator_image(frame, MICROPHONE_COLOR, activity=activity)
         assert ordinary.tobytes() != special.tobytes()
+
+
+def test_quick_release_retracts_from_current_size_without_flashing_full_ring():
+    animator = IndicatorAnimator()
+    recording = CursorIndicatorSnapshot(True, MICROPHONE_COLOR)
+    animator.update(recording, 0.0)
+    before = animator.update(recording, 0.025)
+    released = animator.update(replace(recording, visible=False), 0.025)
+    assert released.frame.radius == before.frame.radius
+    assert released.opacity == before.opacity
+
+
+def test_new_activity_reverses_collapse_without_snapping_to_full_size():
+    animator = IndicatorAnimator()
+    recording = CursorIndicatorSnapshot(True, MICROPHONE_COLOR)
+    hidden = replace(recording, visible=False)
+    animator.update(recording, 0.0)
+    animator.update(recording, 0.2)
+    animator.update(hidden, 0.21)
+    before = animator.update(hidden, 0.35)
+    resumed = animator.update(recording, 0.35)
+    assert resumed.frame.radius == before.frame.radius
+    assert resumed.opacity == before.opacity
+    assert resumed.frame.arc_start == before.frame.arc_start
+    settled = animator.update(recording, 0.52)
+    assert settled.opacity == 1.0
+    assert settled.frame.radius > resumed.frame.radius
+
+
+def test_repeated_terminal_activity_gets_a_fresh_flourish_after_hiding():
+    animator = IndicatorAnimator()
+    success = CursorIndicatorSnapshot(True, MICROPHONE_COLOR, activity="success")
+    animator.update(success, 1.0)
+    first = animator.update(success, 1.17)
+    animator.update(replace(success, visible=False), 1.4)
+    assert not animator.update(replace(success, visible=False), 1.7).visible
+    animator.update(success, 5.0)
+    repeated = animator.update(success, 5.17)
+    assert math.isclose(first.frame.radius, repeated.frame.radius)
+
+
+def test_repeated_interruption_cycles_stay_bounded_and_eventually_hide():
+    animator = IndicatorAnimator()
+    snapshot = CursorIndicatorSnapshot(True, MICROPHONE_COLOR)
+    for index in range(600):
+        visible = index % 19 < 9
+        now = index / 120
+        visual = animator.update(replace(snapshot, visible=visible), now)
+        assert 0.0 <= visual.opacity <= 1.0
+        assert 0.0 <= visual.frame.radius < 29.0
+        if index % 19 in (8, 18):
+            reversed_visual = animator.update(replace(snapshot, visible=not visible), now)
+            assert reversed_visual.frame == visual.frame
+            assert reversed_visual.opacity == visual.opacity
+    hidden = replace(snapshot, visible=False)
+    animator.update(hidden, 5.0)
+    assert not animator.update(hidden, 5.3).visible

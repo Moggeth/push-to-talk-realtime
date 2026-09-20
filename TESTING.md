@@ -387,3 +387,11 @@ Threaded tray tests must isolate every worker started by `tray_setup` and stop i
 - PowerShell search lesson: pass the directory and `rg -g 'test*.py'` rather than
   a wildcard filename argument. Use single-quoted regexes containing double quotes.
 - Ruff requires dictionary literals and rejects unused noqa markers; check before commit.
+- Interrupted-animation regressions (2026-09-21): quick release previously jumped
+  from radius 11.21 to 25.06; resuming during collapse jumped from 16.72 to 25.44.
+  The animator now retains the displayed scale/opacity at each reversal. Test both
+  sides of a transition at the same timestamp to separate jumps from normal motion.
+  Reset terminal activity timing on fresh appearance, including repeated success.
+- Four added regressions include a 600-frame interrupted-animation stress test.
+  Full suite: 274 passed in 8.50 seconds. Offline 600-frame preview: mean 0.98 ms,
+  p95 1.30 ms. No live microphone, API calls, user history, or app restart used.
