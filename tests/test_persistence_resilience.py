@@ -1,6 +1,7 @@
 import http.client
 import json
 import threading
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -81,6 +82,18 @@ def test_database_setup_failure_closes_connection(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="database locked"):
         transcript_store.TranscriptStore(tmp_path / "db")._connect()
     connection.close.assert_called_once()
+
+
+def test_failed_settings_replace_preserves_previous_file(monkeypatch, tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text('{"post_process_model": "gpt-5.6-terra"}')
+    previous = path.read_bytes()
+    monkeypatch.setattr(app, "state", app.SessionState())
+    monkeypatch.setattr(app, "SETTINGS_PATH", path)
+    monkeypatch.setattr(app, "log", Mock())
+    monkeypatch.setattr(Path, "replace", Mock(side_effect=PermissionError("file busy")))
+    assert app.save_settings_to_disk() is False
+    assert path.read_bytes() == previous
 
 
 @pytest.mark.parametrize(

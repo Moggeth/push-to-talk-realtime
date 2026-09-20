@@ -66,3 +66,20 @@ def test_capture_monitor_exits_without_a_key_release(state, monkeypatch, reason)
     monkeypatch.setattr(app.time, "sleep", sleep)
     app.monitor_active_session(1)
     sleep.assert_called_once()
+
+
+def test_shutdown_stops_capture_without_sending_transcription(state, monkeypatch):
+    recorder = Mock()
+    monkeypatch.setattr(app, "build_session_recorder", Mock(return_value=(recorder, 0)))
+    monkeypatch.setattr(
+        app, "start_recorder_with_fallback", Mock(return_value=(True, None, "Default"))
+    )
+    monkeypatch.setattr(app, "monitor_active_session", lambda _: app.shutdown_event.set())
+    monkeypatch.setattr(app, "maybe_beep", Mock())
+    transcribe = Mock()
+    monkeypatch.setattr(app, "finalize_session_transcription", transcribe)
+    start()
+    recorder.stop.assert_called_once()
+    transcribe.assert_not_called()
+    assert not state.is_listening
+    assert state.next_output_session_id == 2

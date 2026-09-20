@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,9 @@ class ThreadRecorder:
 
 class HotkeySessionStartTests(unittest.TestCase):
     def setUp(self) -> None:
+        shutdown_patch = patch.object(push_to_talk, "shutdown_event", threading.Event())
+        shutdown_patch.start()
+        self.addCleanup(shutdown_patch.stop)
         self.original_openai_key = push_to_talk.OPENAI_API_KEY
         with push_to_talk.state.lock:
             push_to_talk.state.is_listening = False
