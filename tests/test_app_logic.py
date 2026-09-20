@@ -1389,7 +1389,32 @@ def test_cursor_indicator_snapshot_uses_fast_orange_transcribing_state():
         True,
         app.TRAY_COLOR_TRANSCRIBING,
         motion_speed=2.6,
+        activity="transcribing",
     )
+
+
+def test_cursor_rewriting_priority_and_recording_override():
+    app.state.is_transcribing = True
+    app.state.is_post_processing = True
+    assert app.cursor_indicator_snapshot().activity == "rewriting"
+    assert app.cursor_indicator_snapshot().color == app.TRAY_COLOR_POST_PROCESSING
+    app.state.is_listening = True
+    assert app.cursor_indicator_snapshot().activity == "recording"
+
+
+def test_cursor_result_expires_and_audio_levels_decay(monkeypatch):
+    monkeypatch.setattr(app.time, "monotonic", lambda: 10.0)
+    app.state.indicator_result = "success"
+    app.state.indicator_result_at = 9.8
+    assert app.cursor_indicator_snapshot().activity == "success"
+    app.state.indicator_result_at = 9.0
+    assert not app.cursor_indicator_snapshot().visible
+    app.state.is_listening = True
+    app.state.last_audio_rms = 0.1
+    app.state.last_audio_time = 10.0
+    assert app.cursor_indicator_snapshot().audio_level == 1.0
+    app.state.last_audio_time = 9.0
+    assert app.cursor_indicator_snapshot().audio_level == 0.0
 
 
 def test_update_tray_tooltip_identifies_gpt_post_processing():

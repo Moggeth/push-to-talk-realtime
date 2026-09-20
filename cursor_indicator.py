@@ -39,6 +39,8 @@ class CursorIndicatorSnapshot:
     motion_speed: float = 1.0
     label: str = ""
     mode: str = "raw"
+    activity: str = "recording"
+    audio_level: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,9 @@ class IndicatorVisual:
     opacity: float
     label: str = ""
     mode: str = "raw"
+    previous_mode: str = "raw"
+    mode_mix: float = 1.0
+    activity: str = "recording"
 
 
 def indicator_frame(elapsed_s: float, motion_speed: float = 1.0) -> IndicatorFrame:
@@ -96,6 +101,13 @@ class IndicatorAnimator:
         self.last_snapshot: CursorIndicatorSnapshot | None = None
         self.present = False
         self.target_visible = False
+        self.audio_level = 0.0
+        self.radius_offset = 0.0
+        self.previous_mode = "raw"
+        self.mode = "raw"
+        self.mode_changed_at = 0.0
+        self.activity = "recording"
+        self.activity_started_at = 0.0
 
     def update(self, snapshot: CursorIndicatorSnapshot, now: float) -> IndicatorVisual:
         previous_at = self.last_at
@@ -110,6 +122,16 @@ class IndicatorAnimator:
                 self.intro_started_at = now
                 self.current_color = snapshot.color
                 self.current_speed = snapshot.motion_speed
+                self.audio_level = 0.0
+                self.radius_offset = 0.0
+                self.mode = self.previous_mode = snapshot.mode
+            if snapshot.mode != self.mode:
+                self.previous_mode = self.mode
+                self.mode = snapshot.mode
+                self.mode_changed_at = now
+            if snapshot.activity != self.activity:
+                self.activity = snapshot.activity
+                self.activity_started_at = now
             self.target_visible = True
             self.last_snapshot = snapshot
         elif self.target_visible:
@@ -147,8 +169,29 @@ class IndicatorAnimator:
             opacity = 1.0 - progress
 
         base_frame = indicator_frame(now - self.cycle_started_at)
+        level = effective_snapshot.audio_level
+        level = min(1.0, max(0.0, level)) if math.isfinite(level) else 0.0
+        if effective_snapshot.activity != "recording":
+            level = 0.0
+        response = 0.035 if level > self.audio_level else 0.16
+        self.audio_level += (level - self.audio_level) * (1.0 - math.exp(-delta_s / response))
+        target_offset = -2.0 if effective_snapshot.activity == "transcribing" else 0.0
+        self.radius_offset += (target_offset - self.radius_offset) * speed_progress
+        terminal_age = max(0.0, now - self.activity_started_at)
+        flourish = (
+            2.5 * math.sin(min(1.0, terminal_age / 0.35) * math.pi)
+            if effective_snapshot.activity == "success"
+            else 0.0
+        )
         frame = IndicatorFrame(
-            radius=base_frame.radius * geometry_scale,
+            radius=(
+                25.0
+                + (base_frame.radius - 25.0) * 0.3
+                + self.audio_level * 2.0
+                + self.radius_offset
+                + flourish
+            )
+            * geometry_scale,
             arc_start=self.phase,
             arc_extent=base_frame.arc_extent,
             arc_width=base_frame.arc_width * (0.55 + 0.45 * geometry_scale),
@@ -160,6 +203,9 @@ class IndicatorAnimator:
             opacity,
             effective_snapshot.label,
             effective_snapshot.mode,
+            self.previous_mode,
+            min(1.0, max(0.0, (now - self.mode_changed_at) / 0.1)),
+            effective_snapshot.activity,
         )
 
     def _hidden_visual(self) -> IndicatorVisual:
@@ -185,7 +231,23 @@ def render_indicator_image(
     opacity: float = 1.0,
     label: str = "",
     mode: str = "raw",
+    previous_mode: str | None = None,
+    mode_mix: float = 1.0,
+    activity: str = "recording",
 ) -> Image.Image:
+    if previous_mode is not None and previous_mode != mode and mode_mix < 1.0:
+        common = {
+            "size": size,
+            "scale": scale,
+            "opacity": opacity,
+            "label": label,
+            "activity": activity,
+        }
+        return Image.blend(
+            render_indicator_image(frame, color, mode=previous_mode, **common),
+            render_indicator_image(frame, color, mode=mode, **common),
+            max(0.0, mode_mix),
+        )
     render_size = size * scale
     center = render_size / 2
     radius = frame.radius * scale
@@ -247,6 +309,30 @@ def render_indicator_image(
             fill=(255, 255, 255, round(255 * alpha_scale)),
             stroke_width=scale,
             stroke_fill=(20, 20, 20, round(230 * alpha_scale)),
+        )
+    if activity == "rewriting" and radius > 5 * scale:
+        draw.arc(
+            (
+                center - radius + 4 * scale,
+                center - radius + 4 * scale,
+                center + radius - 4 * scale,
+                center + radius - 4 * scale,
+            ),
+            start=end_angle + 150,
+            end=end_angle + 200,
+            fill=(*color[:3], round(150 * alpha_scale)),
+            width=scale,
+        )
+    elif activity == "error":
+        # A stationary central warning is distinguishable without relying on color.
+        draw.line(
+            (center, center - 5 * scale, center, center + scale),
+            fill=(*color[:3], round(255 * alpha_scale)),
+            width=2 * scale,
+        )
+        draw.ellipse(
+            (center - scale, center + 4 * scale, center + scale, center + 6 * scale),
+            fill=(*color[:3], round(255 * alpha_scale)),
         )
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
@@ -583,6 +669,9 @@ class CursorActivityIndicator:
                 opacity=visual.opacity,
                 label=visual.label,
                 mode=visual.mode,
+                previous_mode=visual.previous_mode,
+                mode_mix=visual.mode_mix,
+                activity=visual.activity,
             )
             pixels = premultiplied_bgra_bytes(image)
             ctypes.memmove(pixel_buffer, pixels, len(pixels))

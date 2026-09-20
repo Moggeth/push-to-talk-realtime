@@ -321,3 +321,12 @@ Notes and tips
 ### Releasing a conflicting shortcut
 
 Hotkeys are loaded at startup. Changing the default alone does not replace a saved `worklog_hotkey`: set it to an empty string in the active settings file and restart the tray app. Check `WORKLOG_HOTKEY` overrides too. Normal F13 dictation remains available.
+# Cursor Feedback
+
+The thin cursor ring reacts gently to captured audio without opening another microphone.
+Raw, Tidy and Fun blend between their arc, diamond and sparkle shapes. Releasing the
+button keeps the traveler in place while the ring tightens and accelerates in orange.
+GPT rewriting uses magenta with a second inner arc. Successful output gives a short
+green expansion before retracting; output errors show a brief stationary warning.
+Silence simply retracts, and a new recording takes priority over previous results.
+The overlay remains click-through, targets 120 Hz while visible, and idles at 30 Hz.

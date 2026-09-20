@@ -373,3 +373,17 @@ Threaded tray tests must isolate every worker started by `tray_setup` and stop i
 - While the request is pending, change focus, type, alter the selection, or change the clipboard. Expected: the editor is not changed and Transcript history contains the raw and rewritten recovery entry. The clipboard is not overwritten after an independent clipboard change.
 - Trigger F15 repeatedly or hold it. Expected: exactly one job starts and the F15 release is consumed. Verify ordinary right-fingertip Paste and the F13 + Ctrl+V Raw/Tidy/Fun cycle still behave normally.
 - `tests/test_selected_text_tidy.py` covers pre-copy focus changes, missing input tracking, archival failures, clipboard races, thread-start recovery, API completion validation, Android prompt equivalence, GPT-5.6 Terra model routing and debounce. Live Copy must settle before user-input snapshotting; see the dated implementation note for measured results.
+# Cursor Motion Verification
+
+- `python tests/manual_cursor_preview.py` generates an offline animation and contact
+  sheet in ignored `output/`, and benchmarks 600 rendered frames without microphone,
+  keyboard hooks, network calls or touching the live app. The GIF is a 30 fps preview;
+  native rendering still targets 120 Hz.
+- Tests cover audio attack/release smoothing, stale audio, non-finite levels,
+  mode continuity, unclipped tiny entry frames, rewrite/error geometry, result expiry,
+  output success/failure/silence and recording priority over earlier output results.
+- Initial verification: 264 tests passed in 8.41 seconds; renderer mean 0.92 ms,
+  p95 1.15 ms (8.33 ms frame budget). This measures rendering, not display presentation.
+- PowerShell search lesson: pass the directory and `rg -g 'test*.py'` rather than
+  a wildcard filename argument. Use single-quoted regexes containing double quotes.
+- Ruff requires dictionary literals and rejects unused noqa markers; check before commit.

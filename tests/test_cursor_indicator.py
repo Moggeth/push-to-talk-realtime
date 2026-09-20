@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from PIL import Image
 
@@ -117,3 +118,62 @@ def test_premultiplied_bgra_bytes_scale_color_channels_by_alpha():
     image = Image.new("RGBA", (1, 1), (200, 100, 50, 128))
 
     assert premultiplied_bgra_bytes(image) == bytes((25, 50, 100, 128))
+
+
+def test_voice_response_is_smoothed_bounded_and_releases():
+    animator = IndicatorAnimator()
+    quiet = CursorIndicatorSnapshot(True, MICROPHONE_COLOR)
+    animator.update(quiet, 0.0)
+    animator.update(quiet, 0.2)
+    loud = replace(quiet, audio_level=1.0)
+    animator.update(loud, 0.21)
+    assert 0 < animator.audio_level < 1
+    animator.update(loud, 0.3)
+    peak = animator.audio_level
+    animator.update(quiet, 0.31)
+    assert 0 < animator.audio_level < peak
+    visual = animator.update(replace(quiet, audio_level=float("nan")), 0.4)
+    assert math.isfinite(visual.frame.radius)
+    assert visual.frame.radius < 29
+
+
+def test_mode_change_crossfades_without_moving_traveler():
+    animator = IndicatorAnimator()
+    raw = CursorIndicatorSnapshot(True, MICROPHONE_COLOR)
+    animator.update(raw, 0)
+    before = animator.update(raw, 0.2)
+    tidy = replace(raw, mode="tidy")
+    after = animator.update(tidy, 0.2)
+    assert after.frame == before.frame
+    assert after.previous_mode == "raw"
+    assert after.mode_mix == 0
+    assert animator.update(tidy, 0.31).mode_mix == 1
+
+
+def test_all_activity_frames_render_unclipped_including_entry_and_exit():
+    for activity in ("recording", "transcribing", "rewriting", "success", "error"):
+        animator = IndicatorAnimator()
+        snapshot = CursorIndicatorSnapshot(True, MICROPHONE_COLOR, activity=activity)
+        for index in range(50):
+            visual = animator.update(snapshot, index / 120)
+            image = render_indicator_image(
+                visual.frame,
+                visual.color,
+                opacity=visual.opacity,
+                activity=visual.activity,
+                mode="fun",
+                previous_mode="tidy",
+                mode_mix=0.5,
+            )
+            bounds = image.getbbox()
+            if bounds:
+                assert all(value > 0 for value in bounds[:2])
+                assert all(value < INDICATOR_SIZE for value in bounds[2:])
+
+
+def test_rewriting_and_error_have_distinct_geometry():
+    frame = indicator_frame(0.3)
+    ordinary = render_indicator_image(frame, MICROPHONE_COLOR)
+    for activity in ("rewriting", "error"):
+        special = render_indicator_image(frame, MICROPHONE_COLOR, activity=activity)
+        assert ordinary.tobytes() != special.tobytes()

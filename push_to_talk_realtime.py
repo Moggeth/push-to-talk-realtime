@@ -487,6 +487,8 @@ class SessionState:
     muted_warning: bool = False
     last_audio_time: float = 0.0
     last_audio_rms: float = 0.0
+    indicator_result: str = ""
+    indicator_result_at: float = 0.0
     paste_suffix_mode: str = DEFAULT_SUFFIX_MODE
     punctuation_terminal: bool = True
     punctuation_capitalize: bool = False
@@ -640,6 +642,11 @@ def cursor_indicator_snapshot() -> CursorIndicatorSnapshot:
         audio_source = state.active_audio_source
         rewrite_mode = state.recording_rewrite_mode
         show_labels = state.show_mode_labels
+        is_post_processing = state.is_post_processing
+        rms = state.last_audio_rms
+        audio_age = time.monotonic() - state.last_audio_time
+        result = state.indicator_result
+        result_age = time.monotonic() - state.indicator_result_at
     if is_listening:
         color = (
             TRAY_COLOR_SYSTEM_AUDIO_LISTENING
@@ -647,11 +654,35 @@ def cursor_indicator_snapshot() -> CursorIndicatorSnapshot:
             else TRAY_COLOR_LISTENING
         )
         return CursorIndicatorSnapshot(
-            True, color, label=rewrite_mode.title() if show_labels else "", mode=rewrite_mode
+            True,
+            color,
+            label=rewrite_mode.title() if show_labels else "",
+            mode=rewrite_mode,
+            audio_level=min(1.0, max(0.0, rms * 12.0)) if audio_age < 0.25 else 0.0,
+        )
+    if is_post_processing:
+        return CursorIndicatorSnapshot(
+            True,
+            TRAY_COLOR_POST_PROCESSING,
+            motion_speed=1.5,
+            mode=rewrite_mode,
+            activity="rewriting",
         )
     if is_transcribing:
         return CursorIndicatorSnapshot(
-            True, TRAY_COLOR_TRANSCRIBING, motion_speed=2.6, mode=rewrite_mode
+            True,
+            TRAY_COLOR_TRANSCRIBING,
+            motion_speed=2.6,
+            mode=rewrite_mode,
+            activity="transcribing",
+        )
+    if result and result_age < (0.35 if result == "success" else 0.65):
+        return CursorIndicatorSnapshot(
+            True,
+            TRAY_COLOR_READY if result == "success" else TRAY_COLOR_LISTENING,
+            motion_speed=0.0,
+            mode=rewrite_mode,
+            activity=result,
         )
     return CursorIndicatorSnapshot(False, TRAY_COLOR_READY)
 
@@ -2564,6 +2595,7 @@ def activate_session(
         state.muted_warning = False
         state.last_audio_time = time.monotonic()
         state.last_audio_rms = 0.0
+        state.indicator_result = ""
         state.mode = mode
         state.active_hotkey = hotkey_name
         state.active_hotkey_kind = hotkey_kind
@@ -2850,6 +2882,7 @@ def deliver_session_output(
             live_finalizing=outcome.engine_used == TRANSCRIPTION_ENGINE_LIVE,
         )
         return
+    result = "error" if outcome.error is not None else ""
     try:
         with state.lock:
             state.transcript_final = outcome.final_text
@@ -2870,6 +2903,7 @@ def deliver_session_output(
         if not outcome.final_text:
             log("\n(No speech captured.)")
             return
+        result = "success"
         if mode == MODE_WORKLOG:
             append_work_log_entry(outcome.final_text)
             return
@@ -2900,7 +2934,14 @@ def deliver_session_output(
                 log("[Pasted] Transcript output completed.")
             else:
                 log("[Clipboard] Transcript copied, but paste was not sent.")
+    except Exception:
+        result = "error"
+        raise
     finally:
+        with state.lock:
+            if not state.is_listening and not shutdown_event.is_set():
+                state.indicator_result = result
+                state.indicator_result_at = time.monotonic()
         advance_output_turn()
         mark_transcription_finished(
             outcome.final_text,
