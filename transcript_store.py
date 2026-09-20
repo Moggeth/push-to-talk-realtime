@@ -37,10 +37,14 @@ class TranscriptStore:
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.path, timeout=30.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout = 30000")
-        connection.execute("PRAGMA journal_mode = WAL")
-        self._ensure_schema(connection)
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout = 30000")
+            connection.execute("PRAGMA journal_mode = WAL")
+            self._ensure_schema(connection)
+        except Exception:
+            connection.close()
+            raise
         return connection
 
     def _ensure_schema(self, connection: sqlite3.Connection) -> None:

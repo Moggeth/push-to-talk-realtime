@@ -136,6 +136,7 @@ class TranscriptBrowserServer(ThreadingHTTPServer):
 
 class TranscriptBrowserHandler(BaseHTTPRequestHandler):
     server: TranscriptBrowserServer
+    timeout = 5.0
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -167,8 +168,24 @@ class TranscriptBrowserHandler(BaseHTTPRequestHandler):
         if len(parts) != 2 or parts[0] != "delete" or not parts[1].isdigit():
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        content_length = min(int(self.headers.get("Content-Length", "0")), 4096)
-        form = parse_qs(self.rfile.read(content_length).decode("utf-8"))
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+            if not 0 <= content_length <= 4096 or self.headers.get("Transfer-Encoding"):
+                raise ValueError("Invalid body length")
+        except ValueError:
+            self.send_error(HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            body = self.rfile.read(content_length)
+            if len(body) != content_length:
+                raise ValueError("Incomplete body")
+            form = parse_qs(body.decode("utf-8"))
+        except TimeoutError:
+            self.send_error(HTTPStatus.REQUEST_TIMEOUT)
+            return
+        except (ValueError, UnicodeError):
+            self.send_error(HTTPStatus.BAD_REQUEST)
+            return
         if form.get("token", [""])[0] != self.server.delete_token:
             self.send_error(HTTPStatus.FORBIDDEN)
             return

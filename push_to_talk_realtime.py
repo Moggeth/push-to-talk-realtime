@@ -814,7 +814,15 @@ def load_settings_from_disk() -> dict[str, Any]:
     return {}
 
 
+settings_io_lock = threading.RLock()
+
+
 def write_settings_payload(payload: dict[str, Any]) -> None:
+    with settings_io_lock:
+        _write_settings_payload(payload)
+
+
+def _write_settings_payload(payload: dict[str, Any]) -> None:
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     temp_path = SETTINGS_PATH.with_suffix(".tmp")
     temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -822,6 +830,12 @@ def write_settings_payload(payload: dict[str, Any]) -> None:
 
 
 def save_settings_to_disk() -> bool:
+    # Serialize the snapshot as well as replacement: an older writer cannot win.
+    with settings_io_lock:
+        return _save_settings_to_disk()
+
+
+def _save_settings_to_disk() -> bool:
     with state.lock:
         payload = {
             "transcription_engine": state.transcription_engine,
@@ -882,10 +896,12 @@ def apply_persisted_settings() -> None:
             HOTKEY_WORKLOG,
         )
     if settings:
-        dictation_history_enabled = bool(
-            settings.get("dictation_history_enabled", DEFAULT_DICTATION_HISTORY_ENABLED)
-        )
-        post_processing_enabled = bool(settings.get("post_processing_enabled", False))
+        history_setting = settings.get("dictation_history_enabled")
+        if isinstance(history_setting, bool):
+            dictation_history_enabled = history_setting
+        processing_setting = settings.get("post_processing_enabled")
+        if isinstance(processing_setting, bool):
+            post_processing_enabled = processing_setting
         post_process_model = normalize_post_process_model(
             str(settings.get("post_process_model") or DEFAULT_POST_PROCESS_MODEL)
         )
@@ -3037,7 +3053,7 @@ def start_listening(
         log(f"[Session {session_id}] Capture failed:", exc)
     finally:
         capture_timestamps = stop_capture_session(recorder, session_id)
-    if capture_error is not None:
+    if capture_error is not None or shutdown_event.is_set():
         cancel_realtime_worker(
             realtime_worker,
             realtime_stop_event,
