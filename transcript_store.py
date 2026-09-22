@@ -6,7 +6,7 @@ import sqlite3
 import threading
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 
@@ -139,19 +139,101 @@ class TranscriptStore:
                 (final_text, post_process_status, post_process_error, entry_id),
             )
 
-    def list_entries(self, *, search: str = "", limit: int = 500) -> list[TranscriptEntry]:
-        bounded_limit = max(1, min(int(limit), 2000))
-        query = "SELECT * FROM transcript_entries"
-        params: list[object] = []
+    @staticmethod
+    def _filters(
+        *,
+        search: str = "",
+        from_date: str = "",
+        to_date: str = "",
+        mode: str = "",
+        status: str = "",
+    ) -> tuple[str, list[object]]:
+        for value in (from_date, to_date):
+            if value and (len(value) != 10 or date.fromisoformat(value).isoformat() != value):
+                raise ValueError("Use a valid YYYY-MM-DD date.")
+        if from_date and to_date and from_date > to_date:
+            raise ValueError("Start date must be on or before end date.")
+        clauses, params = [], []
         if search.strip():
-            query += " WHERE raw_text LIKE ? OR final_text LIKE ?"
-            pattern = f"%{search.strip()}%"
-            params.extend((pattern, pattern))
-        query += " ORDER BY created_at DESC, id DESC LIMIT ?"
-        params.append(bounded_limit)
+            clauses.append("(raw_text LIKE ? ESCAPE '\\' OR final_text LIKE ? ESCAPE '\\')")
+            literal = search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            params.extend((f"%{literal}%", f"%{literal}%"))
+        for value, clause in (
+            (from_date, "substr(created_at, 1, 10) >= ?"),
+            (to_date, "substr(created_at, 1, 10) <= ?"),
+            (mode, "mode = ?"),
+            (status, "post_process_status = ?"),
+        ):
+            if value:
+                clauses.append(clause)
+                params.append(value)
+        return (" WHERE " + " AND ".join(clauses) if clauses else ""), params
+
+    def list_entries(
+        self,
+        *,
+        search: str = "",
+        limit: int = 500,
+        from_date: str = "",
+        to_date: str = "",
+        mode: str = "",
+        status: str = "",
+    ) -> list[TranscriptEntry]:
+        bounded_limit = max(1, min(int(limit), 2000))
+        where, params = self._filters(
+            search=search, from_date=from_date, to_date=to_date, mode=mode, status=status
+        )
+        query = (
+            "SELECT * FROM transcript_entries"
+            + where
+            + " ORDER BY created_at DESC, id DESC LIMIT ?"
+        )
         with closing(self._connect()) as connection:
-            rows = connection.execute(query, params).fetchall()
+            rows = connection.execute(query, [*params, bounded_limit]).fetchall()
         return [TranscriptEntry(**dict(row)) for row in rows]
+
+    def count_entries(self, **filters: str) -> int:
+        where, params = self._filters(**filters)
+        with closing(self._connect()) as connection:
+            return int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM transcript_entries" + where, params
+                ).fetchone()[0]
+            )
+
+    def filter_options(self) -> tuple[list[str], list[str]]:
+        with closing(self._connect()) as connection:
+            modes = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT DISTINCT mode FROM transcript_entries ORDER BY mode"
+                )
+            ]
+            statuses = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT DISTINCT post_process_status FROM transcript_entries ORDER BY post_process_status"
+                )
+            ]
+        return modes, statuses
+
+    def selected_entries(self, ids: list[int]) -> list[TranscriptEntry]:
+        if (
+            not ids
+            or len(ids) > 500
+            or len(set(ids)) != len(ids)
+            or any(value <= 0 for value in ids)
+        ):
+            raise ValueError("Select 1 to 500 distinct entries.")
+        placeholders = ",".join("?" for _ in ids)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"SELECT * FROM transcript_entries WHERE id IN ({placeholders})", ids
+            ).fetchall()
+        by_id = {row["id"]: TranscriptEntry(**dict(row)) for row in rows}
+        if len(by_id) != len(ids):
+            raise ValueError("A selected entry is no longer available. Review the selection again.")
+        return [by_id[entry_id] for entry_id in ids]
 
     def delete_entry(self, entry_id: int) -> bool:
         with closing(self._connect()) as connection, connection:

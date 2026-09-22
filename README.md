@@ -15,7 +15,7 @@ Features
 - Push-to-talk dictation: record and paste on release.
 - Transcript history: dictations are saved to `work_log.txt` with date/time stamps by default, so each person can review what they said later.
 - Always-on transcript archive: every non-empty dictation and work-log transcript is stored in local SQLite with both the raw speech-to-text result and final output.
-- Local transcript browser: inspect, search, compare, and delete archived entries from a loopback-only HTML interface opened through the tray.
+- Local transcript browser: inspect, search, filter, compare, delete, and explicitly review selected entries for local text/JSON export from the loopback-only interface opened through the tray.
 - Configurable dictation hotkey: set a single key or key combo from the tray menu.
 - Shift-modified dictation: hold `Shift` while pressing the dictation hotkey to capture system audio instead of the microphone.
 - Work log capture: record and append a timestamped entry to `work_log.txt`.
@@ -52,7 +52,7 @@ Hotkeys
 Tray Menu
 ---------
 - Mode: Raw / Tidy / Fun for the current recording. Every new recording starts Raw; mode selection is disabled while idle.
-- Transcript history: opens the searchable local browser with raw and final text, copy and delete controls.
+- Transcript history: opens the local browser with raw/final text, date/mode/status filters, delete controls, and a reviewed selected-entry export.
 - Settings...: opens one resizable native window, also available through the tray's default action (double-click on Windows). Recording contains the transcription model, microphone, capture behavior and paste suffix. Tidy and Fun each have an independent model and inline instruction editor. Feedback contains symbol labels, sounds, text formatting and optional plain-text history. Shortcuts & startup remains a shallow tray submenu.
 - Restart: restarts the systemd user service when managed by systemd, otherwise waits for the current tray instance to exit before relaunching the tracked entry point.
 - Quit: exits the tray app, or stops the systemd user service when managed by systemd.
@@ -301,7 +301,7 @@ Notes and tips
   clipboard or try running the console with elevated permissions on Windows.
 - `work_log.txt` is a plain text history file in the runtime-data directory. Dictations are tagged as `[Dictation]` and manual work-log captures are tagged as `[Work log]`.
 - `transcripts.db` is the authoritative local archive for new captures. The raw transcript is committed before GPT post-processing begins, then the same row receives the final text and processing status. Existing `work_log.txt` rows are not retroactively imported.
-- The transcript browser binds only to `127.0.0.1`, loads no external assets, escapes transcript content, and requires a per-server token for deletion requests. It stops when the tray app exits.
+- The transcript browser binds only to `127.0.0.1`, loads no external assets, escapes transcript content, validates loopback Host and same-origin request headers, and requires a per-server token for deletion/export requests. Export previews use a separate server-only signing secret. It stops when the tray app exits.
 - Deleting an entry in the browser removes it from `transcripts.db`; it does not rewrite older lines already appended to `work_log.txt`.
 - Punctuation options affect both dictation and work log text content.
 - GPT post-processing runs before local punctuation options. It uses the Responses API with response storage disabled and sends only the transcript plus the selected instructions.
@@ -332,3 +332,20 @@ Silence simply retracts, and a new recording takes priority over previous result
 Quick releases retract from the ring's current size; starting again during collapse
 smoothly reverses it instead of flashing a full-size ring.
 The overlay remains click-through, targets 120 Hz while visible, and idles at 30 Hz.
+
+
+## Reviewed local transcript handoff
+
+Open **Transcript history** from the tray. The existing browser now supports:
+
+1. Filter by text, inclusive **From date / Through date**, stored capture mode, and processing status. Dates use the calendar date recorded on each entry; offsets are preserved and no conversion to the current timezone is applied. Search treats `%` and `_` literally. Results show the displayed count and total matches; at most 500 are displayed, so narrow filters to reach older records.
+2. Check individual entries and choose **Review selected export**. No entries are selected automatically. Applying filters, refreshing or using **Return to history** clears the selection; selection is local to the current page rather than a hidden basket spanning filters.
+3. Review the exact selected count, date span and raw/final text. A privacy acknowledgement is required before **Download text** or **Download JSON**. These local files contain only the selected entries, in preview order. They include IDs, recorded timestamps, capture mode, audio-source label, processing status, raw text and final text. Internal rewrite instructions, model/profile metadata and provider-error details are omitted from the download.
+
+Raw and final text are separate fields. Missing final text stays empty in JSON and is explicitly marked in text; raw text is never silently substituted. JSON uses the versioned `push-to-talk-transcript-handoff.v1` envelope with entry count, date range, export timestamp and selection fingerprint. The plain-text file is intended for reading; JSON preserves arbitrary multiline text and field boundaries precisely. Neither format executes formula-like text.
+
+**Privacy:** raw/final transcripts may contain private information. Nothing is automatically redacted. Downloading does not send transcripts to a provider or change recording, archive retention, work-log output or paste behavior. A downloaded file is a separate copy: deleting an archive entry does not remove that file. Review it before sharing. There is no automatic sending, cloud sync or export retention service.
+
+The server binds each preview to the selected IDs and complete current rows. If a selected entry is finalized, edited or deleted before download, the export fails as a whole; open a fresh preview. Stale forms from an earlier browser-server run are rejected. Previously saved archive entries remain available after reopening the browser, but selection and acknowledgement must be made again. No temporary export files or preview copies are retained by the server. Preview/download diagnostics emit timestamped count/format events through the existing app logger without transcript text.
+
+This flow uses server-rendered forms and works without JavaScript. It requires the local transcript-browser server; a downloaded HTML page is not a separate archive application. Verification instructions and the safe synthetic-only launcher are in `TESTING.md`; implementation timings and review findings are in `docs/2026-09-23-transcript-export.md`.

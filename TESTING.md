@@ -395,3 +395,36 @@ Threaded tray tests must isolate every worker started by `tray_setup` and stop i
 - Four added regressions include a 600-frame interrupted-animation stress test.
   Full suite: 274 passed in 8.50 seconds. Offline 600-frame preview: mean 0.98 ms,
   p95 1.30 ms. No live microphone, API calls, user history, or app restart used.
+
+
+## Reviewed transcript export (synthetic only)
+
+For work confined to the transcript browser/store/export layer, run the focused suite instead of starting capture or the tray app:
+
+```powershell
+python -m pytest -vv tests/test_transcript_browser.py tests/test_transcript_store.py tests/test_transcript_exports.py
+ruff check transcript_browser.py transcript_store.py transcript_exports.py tests/test_transcript_exports.py tests/synthetic_transcript_browser.py
+ruff format --check transcript_browser.py transcript_store.py transcript_exports.py tests/test_transcript_exports.py tests/synthetic_transcript_browser.py
+```
+
+The 33 focused cases cover the existing archive/browser behavior plus inclusive recorded dates (including offset boundaries), combined filters, literal search, invalid dates/selections, selected-only JSON/text, raw/final distinction, Unicode/HTML escaping, changed/deleted records, tampered or unreviewed export, acknowledgement, server restart, foreign Host/Origin, malformed ports and client-visible-token forgery. All stores use temporary synthetic databases; no settings, microphone, system audio, hotkeys, provider calls or clipboard are required.
+
+A temporary browser fixture is available without starting the user app:
+
+```powershell
+python tests/synthetic_transcript_browser.py
+```
+
+It creates three clearly synthetic entries in a temporary directory and binds `127.0.0.1:18477`. It does not open a desktop browser or read the real archive. Stop its own terminal with Ctrl+C; its temporary directory is removed on normal exit. Do not point this fixture or its tests at real transcripts. Its metadata-only preview/download log goes to that terminal.
+
+With Playwright already available, run the headless check from another terminal:
+
+```powershell
+# If Playwright is installed outside this project, point to its ESM package entry:
+$env:PLAYWRIGHT_MODULE = 'file:///absolute/path/to/playwright/index.mjs'
+node tests/transcript_browser_smoke.mjs
+```
+
+Omit the variable if `playwright` resolves normally. The script disables JavaScript, blocks external requests, verifies filters and selection reset, downloads both formats, checks exact contents, captures desktop/390px mobile previews under ignored `output/transcript-export-qa/`, and closes its own browser. It neither installs dependencies nor accesses the clipboard. This is an isolated fixture test, not a restart or verification of the running tray app.
+
+When editing these Python files on Windows, specify UTF-8 and normalized newlines explicitly; platform-default `Path.write_text()` can create mixed encodings when adding non-ASCII UI punctuation. Filter selects have explicit accessible labels so browser checks do not accidentally include option text in the control name. Reuse the scoped fixtures and avoid broad device/provider suites for this UI-only change.

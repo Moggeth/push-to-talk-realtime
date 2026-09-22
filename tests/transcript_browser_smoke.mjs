@@ -1,0 +1,41 @@
+/** Only use against the temporary synthetic harness on 127.0.0.1:18477. */
+import assert from 'node:assert/strict';
+import { readFile, mkdir } from 'node:fs/promises';
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const started = performance.now();
+const browser = await chromium.launch({headless:true});
+const context = await browser.newContext({viewport:{width:1440,height:1000},javaScriptEnabled:false});
+const page = await context.newPage(); page.setDefaultTimeout(8000);
+const external=[], errors=[];
+page.on('pageerror', e=>errors.push(e.message));
+await context.route('**/*', route=>{if(!route.request().url().startsWith('http://127.0.0.1:18477/')){external.push(route.request().url());return route.abort();}return route.continue();});
+await mkdir('output/transcript-export-qa',{recursive:true});
+const download=async(name)=>{const event=page.waitForEvent('download');await page.getByRole('button',{name,exact:true}).click();const artifact=await event;return readFile(await artifact.path(),'utf8');};
+try {
+ await page.goto('http://127.0.0.1:18477/');
+ assert.equal(await page.locator('.entry').count(),3);
+ assert.match(await page.locator('body').innerText(),/SYNTHETIC alpha raw/);
+ await page.getByLabel('Select entry 1',{exact:true}).check(); await page.reload(); assert.equal(await page.getByLabel('Select entry 1',{exact:true}).isChecked(),false);
+ await page.getByLabel('From date',{exact:true}).fill('2026-01-01'); await page.getByLabel('Through date',{exact:true}).fill('2026-01-02');
+ await page.getByRole('button',{name:'Apply filters'}).click(); assert.equal(await page.locator('.entry').count(),2);
+ await page.getByLabel('Capture mode',{exact:true}).selectOption('work_log'); await page.getByLabel('Processing status',{exact:true}).selectOption('failed');
+ await page.getByRole('button',{name:'Apply filters'}).click(); assert.equal(await page.locator('.entry').count(),1); assert.match(await page.locator('.entry').innerText(),/SYNTHETIC beta/);
+ await page.getByRole('link',{name:'Clear filters'}).click();
+ await page.getByLabel('Select entry 1',{exact:true}).check(); await page.getByLabel('Select entry 3',{exact:true}).check();
+ await page.getByRole('button',{name:'Review selected export',exact:true}).click();
+ assert.equal(await page.locator('.entry').count(),2); assert.match(await page.locator('body').innerText(),/2 selected entries/); assert.match(await page.locator('body').innerText(),/2026-01-01 through 2026-01-03/);
+ assert.ok(!(await page.locator('body').innerText()).includes('SYNTHETIC beta'));
+ await page.getByRole('checkbox',{name:/I reviewed these selected/}).check();
+ const pack=JSON.parse(await download('Download JSON'));
+ assert.equal(pack.entry_count,2); assert.deepEqual(pack.entries.map(row=>row.id),[3,1]); assert.equal(pack.entries[0].final_text,'');
+ assert.equal(pack.entries[1].raw_text,'SYNTHETIC alpha raw <script>literal only</script>');
+ const text=await download('Download text'); assert.match(text,/Entries: 2/);assert.match(text,/RAW TRANSCRIPT/);assert.match(text,/FINAL TEXT/);assert.ok(!text.includes('SYNTHETIC beta'));
+ await page.screenshot({path:'output/transcript-export-qa/desktop-preview.png',fullPage:true});
+ await page.setViewportSize({width:390,height:844}); await page.screenshot({path:'output/transcript-export-qa/mobile-preview.png',fullPage:true});
+ await page.getByRole('link',{name:'Return to history (selection clears)',exact:true}).click();
+ assert.equal(await page.locator('input[name=entry_id]:checked').count(),0);
+ await page.getByLabel('Search transcripts').fill('gamma'); await page.getByRole('button',{name:'Apply filters'}).click(); assert.equal(await page.locator('.entry').count(),1);
+ assert.match(await page.locator('.entry').innerText(),/No final text recorded/);
+ assert.deepEqual(external,[]);assert.deepEqual(errors,[]);
+ console.log(JSON.stringify({result:'passed',javascript:false,checks:['date boundaries','combined mode/status','explicit selection','refresh clears selection','preview count/date span','JSON exact selected raw/final','text exact selection','return clears selection','search','desktop/mobile'],seconds:(performance.now()-started)/1000}));
+} finally {await browser.close();}
