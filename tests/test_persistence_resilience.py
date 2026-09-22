@@ -101,7 +101,7 @@ def test_failed_settings_replace_preserves_previous_file(monkeypatch, tmp_path):
     [
         ("nope", b"", 400),
         ("-1", b"", 400),
-        ("4097", b"", 400),
+        ("32769", b"", 400),
         ("1", b"\xff", 400),
         ("10", b"", 408),
     ],

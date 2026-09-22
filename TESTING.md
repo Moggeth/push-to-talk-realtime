@@ -375,6 +375,10 @@ Threaded tray tests must isolate every worker started by `tray_setup` and stop i
 - `tests/test_selected_text_tidy.py` covers pre-copy focus changes, missing input tracking, archival failures, clipboard races, thread-start recovery, API completion validation, Android prompt equivalence, GPT-5.6 Terra model routing and debounce. Live Copy must settle before user-input snapshotting; see the dated implementation note for measured results.
 # Cursor Motion Verification
 
+History-body test maintenance (2026-09-23): exports increased the shared request
+limit to 32768 bytes. The old 4097-byte oversized fixture now correctly waits for
+the body and returns 408, not 400. Use 32769 for the oversized-body regression.
+
 - `python tests/manual_cursor_preview.py` generates an offline animation and contact
   sheet in ignored `output/`, and benchmarks 600 rendered frames without microphone,
   keyboard hooks, network calls or touching the live app. The GIF is a 30 fps preview;
