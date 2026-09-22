@@ -379,6 +379,21 @@ History-body test maintenance (2026-09-23): exports increased the shared request
 limit to 32768 bytes. The old 4097-byte oversized fixture now correctly waits for
 the body and returns 408, not 400. Use 32769 for the oversized-body regression.
 
+### Windows Process Recovery (2026-09-23)
+
+- `tests/test_process_supervisor.py` covers zero/nonzero/native-like crash codes,
+  explicit exit, bounded retry delays, recovery after stable uptime, launch errors,
+  unavailable supervisor logs, foreground exit mapping and restart wait timeouts.
+- A real synthetic subprocess exits abruptly, is restarted, then deliberately exits;
+  this verifies recovery without recording audio or making API requests.
+- A Windows process-wait test proves the child remains alive while waiting. Never
+  use `os.kill(pid, 0)` as a Windows liveness probe: it calls process termination,
+  unlike POSIX. Use a SYNCHRONIZE handle and WaitForSingleObject instead.
+- Application tests distinguish unexpected tray-loop return from intentional
+  shutdown and duplicate-instance exit. Linux service delegation stays unchanged.
+- Launch through `start_push_to_talk.py`, not the application module, to verify
+  recovery. Do not deliberately kill a live dictation; use the synthetic fixture.
+
 - `python tests/manual_cursor_preview.py` generates an offline animation and contact
   sheet in ignored `output/`, and benchmarks 600 rendered frames without microphone,
   keyboard hooks, network calls or touching the live app. The GIF is a 30 fps preview;

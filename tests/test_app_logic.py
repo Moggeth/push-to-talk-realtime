@@ -2284,7 +2284,8 @@ def test_tray_exit_stops_listener_hides_icon_and_sets_shutdown(monkeypatch):
     assert icon.stopped == 1
 
 
-def test_main_builds_icon_and_runs_tray(monkeypatch):
+@pytest.mark.parametrize("intentional", [False, True])
+def test_main_builds_icon_and_runs_tray(monkeypatch, intentional):
     calls = []
 
     class FakeGuard:
@@ -2298,6 +2299,8 @@ def test_main_builds_icon_and_runs_tray(monkeypatch):
 
         def run(self, setup):
             calls.append(("run", setup))
+            if intentional:
+                app.shutdown_event.set()
 
     monkeypatch.setattr(app, "refresh_device_list", lambda: calls.append(("refresh",)))
     monkeypatch.setattr(app, "acquire_app_instance_guard", lambda: FakeGuard())
@@ -2307,7 +2310,7 @@ def test_main_builds_icon_and_runs_tray(monkeypatch):
     monkeypatch.setattr(app, "stop_input_listeners", lambda: calls.append(("stop",)))
     monkeypatch.setattr(app, "stop_transcript_browser", lambda: calls.append(("browser",)))
 
-    app.main()
+    assert app.main() == (0 if intentional else 1)
 
     assert calls == [
         ("refresh",),
@@ -2326,7 +2329,7 @@ def test_main_exits_when_another_instance_is_running(monkeypatch):
     monkeypatch.setattr(app, "refresh_device_list", lambda: calls.append("refresh"))
     monkeypatch.setattr(app, "log", lambda *args: calls.append(" ".join(map(str, args))))
 
-    app.main()
+    assert app.main() == 0
 
     assert calls == ["[Startup] Another push-to-talk instance is already running; exiting."]
 
@@ -2408,13 +2411,11 @@ def test_restart_app_relaunches_after_current_instance_exits(monkeypatch, tmp_pa
     app.restart_app("tray")
 
     command = popen_calls[0][0][0]
-    assert command[:2] == [app.sys.executable, "-c"]
-    assert "os.kill(pid, 0)" in command[2]
-    assert command[3:] == [
-        "12345",
+    assert command == [
         app.sys.executable,
-        str(tmp_path / "push_to_talk_realtime.py"),
-        str(tmp_path),
+        str(tmp_path / "start_push_to_talk.py"),
+        "--restart-after",
+        "12345",
     ]
     assert popen_calls[0][1] == {"cwd": str(tmp_path)}
     assert exit_calls == ["tray"]

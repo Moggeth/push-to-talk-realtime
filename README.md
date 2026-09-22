@@ -11,6 +11,7 @@ although external launchers can still start it by pointing at this checkout.
 
 Features
 --------
+- Windows process recovery: the normal launcher keeps a small supervisor outside the tray app. Unexpected process exits restart automatically, normally after 1-2 seconds; repeated startup failures back off to 60 seconds. Explicit Quit stops both, and Restart returns through the supervised launcher. Existing hotkeys, settings and history are unchanged.
 - Cursor overlay recovery: externally hidden windows are restored on the next active frame. An unexpected overlay shutdown retries after five seconds; startup and failures are recorded in the app log.
 - Push-to-talk dictation: record and paste on release.
 - Transcript history: dictations are saved to `work_log.txt` with date/time stamps by default, so each person can review what they said later.
@@ -332,6 +333,24 @@ Silence simply retracts, and a new recording takes priority over previous result
 Quick releases retract from the ring's current size; starting again during collapse
 smoothly reverses it instead of flashing a full-size ring.
 The overlay remains click-through, targets 120 Hz while visible, and idles at 30 Hz.
+
+### Unexpected exits on Windows
+
+Start with `python start_push_to_talk.py` to enable process recovery. The tray's
+Quit action deliberately stops recovery too; Restart waits for the old process
+without forcibly terminating it. `--foreground` remains an unsupervised debug mode.
+Launching `push_to_talk_realtime.py` directly also bypasses recovery.
+
+Diagnostics live in `%LOCALAPPDATA%\PushToTalkRealtime`:
+- `push_to_talk_supervisor.log`: timestamps, child PIDs, exit codes, lifetimes and retries.
+- `push_to_talk_starter.log`: child console output and native Python crash traces.
+- `push_to_talk_supervisor_bootstrap.log`: supervisor startup errors and fallback diagnostics.
+- `push_to_talk_realtime.log`: application activity and intentional Quit/Restart requests.
+
+Supervisor logs rotate; child console output rotates between launches. A supervisor
+does not survive being terminated itself, Windows sign-out, or a reboot. Enable
+Run on startup in the tray for sign-in launch. It detects exits, not a frozen live
+process, and cannot recover audio still held in memory at the moment of a crash.
 
 
 ## Reviewed local transcript handoff

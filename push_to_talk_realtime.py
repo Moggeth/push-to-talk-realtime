@@ -1248,26 +1248,11 @@ def acquire_app_instance_guard() -> AppInstanceGuard | None:
 
 
 def restart_helper_command() -> list[str]:
-    helper_code = (
-        "import os, subprocess, sys, time\n"
-        "pid = int(sys.argv[1])\n"
-        "exe, script, cwd = sys.argv[2], sys.argv[3], sys.argv[4]\n"
-        "for _ in range(100):\n"
-        "    try:\n"
-        "        os.kill(pid, 0)\n"
-        "    except OSError:\n"
-        "        break\n"
-        "    time.sleep(0.1)\n"
-        "subprocess.Popen([exe, script], cwd=cwd)\n"
-    )
     return [
         sys.executable,
-        "-c",
-        helper_code,
+        str(SCRIPT_DIR / "start_push_to_talk.py"),
+        "--restart-after",
         str(os.getpid()),
-        sys.executable,
-        str(SCRIPT_DIR / "push_to_talk_realtime.py"),
-        str(SCRIPT_DIR),
     ]
 
 
@@ -3885,6 +3870,7 @@ def prompt_for_hotkey(_icon=None, _item=None) -> None:
 
 
 def quit_app(icon: TrayIconLike | None = None, _item=None) -> None:
+    log("[Lifecycle] Quit requested from tray.")
     if is_systemd_managed():
         run_systemd_action("stop")
         return
@@ -3892,6 +3878,7 @@ def quit_app(icon: TrayIconLike | None = None, _item=None) -> None:
 
 
 def restart_app(icon: TrayIconLike | None = None, _item=None) -> None:
+    log("[Lifecycle] Restart requested from tray.")
     if is_systemd_managed():
         run_systemd_action("restart")
         return
@@ -4511,13 +4498,13 @@ def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
     icon.stop()
 
 
-def main() -> None:
+def main() -> int:
     global tray_icon
     install_runtime_hooks()
     instance_guard = acquire_app_instance_guard()
     if instance_guard is None:
         log("[Startup] Another push-to-talk instance is already running; exiting.")
-        return
+        return 0
     try:
         moved_files, migration_failures = migrate_legacy_runtime_files(RUNTIME_PATHS, SCRIPT_DIR)
         for source, destination in moved_files:
@@ -4532,9 +4519,15 @@ def main() -> None:
             build_menu(),
         )
         tray_icon.run(setup=tray_setup)
+        if not shutdown_event.is_set():
+            log("[Lifecycle] Tray loop ended unexpectedly; requesting recovery.")
+            return 1
+        log("[Lifecycle] Tray loop stopped after shutdown request.")
+        return 0
     except KeyboardInterrupt:
         log("\nExiting...")
         tray_exit(tray_icon)
+        return 0
     finally:
         stop_cursor_activity_indicator()
         stop_warm_microphone_watchdog()
@@ -4547,4 +4540,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    main()
+    raise SystemExit(main())
