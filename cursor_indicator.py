@@ -30,6 +30,11 @@ class IndicatorFrame:
     arc_start: float
     arc_extent: float
     arc_width: float
+    center_dx: float = 0.0
+    center_dy: float = 0.0
+    marker_scale: float = 1.0
+    marker_spin: float = 0.0
+    extent_gain: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -112,6 +117,10 @@ class IndicatorAnimator:
         self.opacity = 0.0
         self.transition_scale = 0.08
         self.transition_opacity = 0.0
+        self.fresh_intro = True
+        self.impulses: list[tuple[float, float]] = []
+        self.jostle_armed = True
+        self.last_onset_at = -math.inf
 
     def update(self, snapshot: CursorIndicatorSnapshot, now: float) -> IndicatorVisual:
         previous_at = self.last_at
@@ -133,6 +142,14 @@ class IndicatorAnimator:
                 self.activity_started_at = now
                 self.geometry_scale = 0.08
                 self.opacity = 0.0
+                self.geometry_scale = 0.5
+                self.impulses.clear()
+                self.jostle_armed = True
+                self.last_onset_at = -math.inf
+                self.fresh_intro = True
+                delta_s = 0.0
+            elif not self.target_visible:
+                self.fresh_intro = False
             if not self.target_visible:
                 self.intro_started_at = now
                 self.transition_scale = self.geometry_scale
@@ -163,16 +180,38 @@ class IndicatorAnimator:
             effective_snapshot.color,
             color_progress,
         )
-        self.current_speed += (
-            effective_snapshot.motion_speed - self.current_speed
-        ) * speed_progress
-        self.phase = (self.phase + delta_s * BASE_ROTATION_DEG_S * self.current_speed) % 360.0
+        target_speed = effective_snapshot.motion_speed
+        travel = (
+            target_speed * delta_s
+            + (self.current_speed - target_speed) * SPEED_RESPONSE_S * speed_progress
+        )
+        self.current_speed += (target_speed - self.current_speed) * speed_progress
+        age = max(0.0, now - self.cycle_started_at)
+
+        def entry_sweep(t: float) -> float:
+            return 26.6 * (1.0 - (1.0 - min(1.0, max(0.0, t / 0.28))) ** 4)
+
+        self.phase = (
+            self.phase
+            + BASE_ROTATION_DEG_S * travel
+            + entry_sweep(age)
+            - entry_sweep(
+                max(0.0, (previous_at if previous_at is not None else now) - self.cycle_started_at)
+            )
+        ) % 360.0
 
         if self.target_visible:
             progress = min(1.0, max(0.0, (now - self.intro_started_at) / INTRO_DURATION_S))
             eased = 1.0 - (1.0 - progress) ** 3
             geometry_scale = self.transition_scale + (1.0 - self.transition_scale) * eased
             opacity = self.transition_opacity + (1.0 - self.transition_opacity) * eased
+            if self.fresh_intro:
+                if age < 0.13:
+                    geometry_scale = 0.5 + 0.55 * (1.0 - (1.0 - age / 0.13) ** 3)
+                else:
+                    settle = min(1.0, (age - 0.13) / 0.15)
+                    geometry_scale = 1.025 + 0.025 * math.cos(math.pi * settle)
+                opacity = 1.0 - (1.0 - min(1.0, age / 0.08)) ** 2
         else:
             progress = min(1.0, max(0.0, (now - self.outro_started_at) / OUTRO_DURATION_S))
             if progress >= 1.0:
@@ -192,7 +231,29 @@ class IndicatorAnimator:
         if effective_snapshot.activity != "recording":
             level = 0.0
         response = 0.035 if level > self.audio_level else 0.16
+        previous_level = self.audio_level
         self.audio_level += (level - self.audio_level) * (1.0 - math.exp(-delta_s / response))
+        if self.jostle_armed and level > 0.12 and previous_level < 0.12 <= self.audio_level:
+            # Solve the exponential crossing rather than quantizing onsets to a frame.
+            crossing = response * math.log((level - previous_level) / (level - 0.12))
+            onset = now - delta_s + crossing
+            if onset - self.last_onset_at >= 0.16:
+                self.impulses.append((onset, math.radians(self.phase + 90.0)))
+                self.last_onset_at = onset
+            self.jostle_armed = False
+        if self.audio_level < 0.06:
+            self.jostle_armed = True
+        self.impulses = [(t, d) for t, d in self.impulses[-3:] if now - t < 0.35]
+        radial = dx = dy = 0.0
+        for onset, direction in self.impulses:
+            t = max(0.0, now - onset)
+            impulse = 0.8 * math.exp(-20.735 * t) * math.sin(65.933 * t)
+            radial += impulse
+            dx += impulse * math.cos(direction)
+            dy += impulse * math.sin(direction)
+        jostle = math.tanh(radial)
+        distance = math.hypot(dx, dy)
+        offset_scale = 0.7 * math.tanh(distance) / distance if distance else 0.0
         target_offset = -2.0 if effective_snapshot.activity == "transcribing" else 0.0
         self.radius_offset += (target_offset - self.radius_offset) * speed_progress
         terminal_age = max(0.0, now - self.activity_started_at)
@@ -201,18 +262,33 @@ class IndicatorAnimator:
             if effective_snapshot.activity == "success"
             else 0.0
         )
+        extent_gain = 1.0 - 0.65 * (1.0 - min(1.0, age / 0.22)) ** 3
+        extent = (base_frame.arc_extent + 16.0 * self.audio_level) * extent_gain
         frame = IndicatorFrame(
-            radius=(
-                25.0
-                + (base_frame.radius - 25.0) * 0.3
-                + self.audio_level * 2.0
-                + self.radius_offset
-                + flourish
-            )
-            * geometry_scale,
-            arc_start=self.phase,
-            arc_extent=base_frame.arc_extent,
-            arc_width=base_frame.arc_width * (0.55 + 0.45 * geometry_scale),
+            radius=min(
+                31.0,
+                (
+                    25.0
+                    + (base_frame.radius - 25.0) * 0.3
+                    + self.audio_level * 1.6
+                    + 1.1 * jostle
+                    + self.radius_offset
+                    + flourish
+                )
+                * geometry_scale,
+            ),
+            arc_start=(self.phase + 6.0 * jostle - extent) % 360.0,
+            arc_extent=extent,
+            arc_width=min(
+                3.8,
+                base_frame.arc_width * (0.55 + 0.45 * min(1.0, geometry_scale))
+                + 0.4 * self.audio_level,
+            ),
+            center_dx=dx * offset_scale * geometry_scale,
+            center_dy=dy * offset_scale * geometry_scale,
+            marker_scale=1.0 + 0.15 * math.sin(math.pi * min(1.0, age / 0.28)),
+            marker_spin=90.0 * (1.0 - min(1.0, age / 0.28)) ** 3,
+            extent_gain=extent_gain,
         )
         return IndicatorVisual(
             True,
@@ -268,12 +344,14 @@ def render_indicator_image(
         )
     render_size = size * scale
     center = render_size / 2
+    cx = center + frame.center_dx * scale
+    cy = center + frame.center_dy * scale
     radius = frame.radius * scale
     bounds = (
-        round(center - radius),
-        round(center - radius),
-        round(center + radius),
-        round(center + radius),
+        round(cx - radius),
+        round(cy - radius),
+        round(cx + radius),
+        round(cy + radius),
     )
     image = Image.new("RGBA", (render_size, render_size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
@@ -284,7 +362,11 @@ def render_indicator_image(
         outline=(*track_rgb, round(178 * alpha_scale)),
         width=max(1, round(TRACK_WIDTH * scale)),
     )
-    extent = frame.arc_extent if mode == "raw" else (42.0 if mode == "tidy" else 66.0)
+    extent = (
+        frame.arc_extent
+        if mode == "raw"
+        else (42.0 if mode == "tidy" else 66.0) * frame.extent_gain
+    )
     end_angle = frame.arc_start + frame.arc_extent
     draw.arc(
         bounds,
@@ -297,10 +379,10 @@ def render_indicator_image(
 
         def point(angle, distance):
             radians = math.radians(angle)
-            return (center + math.cos(radians) * distance, center + math.sin(radians) * distance)
+            return (cx + math.cos(radians) * distance, cy + math.sin(radians) * distance)
 
         x, y = point(end_angle, radius)
-        marker = min(1.0, frame.radius / 25.0) * scale
+        marker = min(1.0, frame.radius / 25.0) * frame.marker_scale * scale
         fill = (*color[:3], round(255 * alpha_scale))
         if mode == "tidy":
             r = 3.2 * marker
@@ -309,7 +391,7 @@ def render_indicator_image(
             r = (4.0 + (frame.arc_width - 2.6) * 1.8) * marker
             points = []
             for index in range(8):
-                angle = math.radians(index * 45 - 90)
+                angle = math.radians(index * 45 - 90 + frame.marker_spin)
                 length = r if index % 2 == 0 else r * 0.3
                 points.append((x + math.cos(angle) * length, y + math.sin(angle) * length))
             draw.polygon(points, fill=fill)
@@ -331,10 +413,10 @@ def render_indicator_image(
     if activity == "rewriting" and radius > 5 * scale:
         draw.arc(
             (
-                center - radius + 4 * scale,
-                center - radius + 4 * scale,
-                center + radius - 4 * scale,
-                center + radius - 4 * scale,
+                cx - radius + 4 * scale,
+                cy - radius + 4 * scale,
+                cx + radius - 4 * scale,
+                cy + radius - 4 * scale,
             ),
             start=end_angle + 150,
             end=end_angle + 200,

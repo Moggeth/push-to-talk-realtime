@@ -324,6 +324,11 @@ Notes and tips
 Hotkeys are loaded at startup. Changing the default alone does not replace a saved `worklog_hotkey`: set it to an empty string in the active settings file and restart the tray app. Check `WORKLOG_HOTKEY` overrides too. Normal F13 dictation remains available.
 # Cursor Feedback
 
+The opening now blooms quickly, overshoots gently, then settles in 280 ms with a
+short extra traveler sweep. Speech onsets give it a small damped radial/angular
+nudge and sub-pixel sideways movement. Sustained audio does not keep shaking it;
+silence settles the movement. The ring keeps the same colors and 120 Hz target.
+
 The thin cursor ring reacts gently to captured audio without opening another microphone.
 Raw, Tidy and Fun blend between their arc, diamond and sparkle shapes. Releasing the
 button keeps the traveler in place while the ring tightens and accelerates in orange.

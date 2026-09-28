@@ -375,6 +375,17 @@ Threaded tray tests must isolate every worker started by `tray_setup` and stop i
 - `tests/test_selected_text_tidy.py` covers pre-copy focus changes, missing input tracking, archival failures, clipboard races, thread-start recovery, API completion validation, Android prompt equivalence, GPT-5.6 Terra model routing and debounce. Live Copy must settle before user-input snapshotting; see the dated implementation note for measured results.
 # Cursor Motion Verification
 
+2026-09-28 Opus motion refinement: `tests/test_cursor_indicator.py` verifies the
+5% entry overshoot, settling by 280 ms, exact 26.6-degree extra sweep, bounded
+single-onset jostle, sustained-input settling, silent/non-finite/threshold input,
+refresh-rate consistency at 60/120/144/240 Hz and high-audio clipping bounds.
+The offline preview also generates `output/cursor-entry-preview.png`.
+The original opacity assertion expected a 160 ms fade; the commissioned design
+reaches full opacity at 80 ms, so its halfway assertion now samples at 40 ms.
+Keep interruption tests unchanged: capture the last displayed envelope at reversal.
+Mode-switch angular checks must compare `arc_start + arc_extent` (the traveler),
+not the trailing edge: the new audio/entry treatment intentionally varies arc length.
+
 History-body test maintenance (2026-09-23): exports increased the shared request
 limit to 32768 bytes. The old 4097-byte oversized fixture now correctly waits for
 the body and returns 408, not 400. Use 32769 for the oversized-body regression.

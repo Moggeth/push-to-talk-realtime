@@ -56,8 +56,8 @@ def test_indicator_animator_expands_from_cursor_on_entry():
     recording = CursorIndicatorSnapshot(True, MICROPHONE_COLOR)
 
     first = animator.update(recording, 0.0)
-    middle = animator.update(recording, 0.08)
-    settled = animator.update(recording, 0.16)
+    middle = animator.update(recording, 0.04)
+    settled = animator.update(recording, 0.28)
 
     assert first.visible is True
     assert first.opacity == 0.0
@@ -153,7 +153,9 @@ def test_mode_change_crossfades_without_moving_traveler():
 def test_all_activity_frames_render_unclipped_including_entry_and_exit():
     for activity in ("recording", "transcribing", "rewriting", "success", "error"):
         animator = IndicatorAnimator()
-        snapshot = CursorIndicatorSnapshot(True, MICROPHONE_COLOR, activity=activity)
+        snapshot = CursorIndicatorSnapshot(
+            True, MICROPHONE_COLOR, activity=activity, audio_level=1.0
+        )
         for index in range(50):
             visual = animator.update(snapshot, index / 120)
             image = render_indicator_image(
@@ -234,3 +236,58 @@ def test_repeated_interruption_cycles_stay_bounded_and_eventually_hide():
     hidden = replace(snapshot, visible=False)
     animator.update(hidden, 5.0)
     assert not animator.update(hidden, 5.3).visible
+
+
+def test_entry_has_bounded_overshoot_then_settles_and_exact_extra_sweep():
+    animator = IndicatorAnimator()
+    recording = CursorIndicatorSnapshot(True, MICROPHONE_COLOR)
+    animator.update(recording, 0)
+    for i in range(1, 14):
+        animator.update(recording, i / 100)
+    assert math.isclose(animator.geometry_scale, 1.05)
+    for i in range(14, 29):
+        animator.update(recording, i / 100)
+    assert math.isclose(animator.geometry_scale, 1.0)
+    assert math.isclose(animator.phase, (-90 + 190 * 0.28 + 26.6) % 360)
+
+
+def test_audio_onset_jostles_once_and_settles_under_sustained_audio():
+    animator = IndicatorAnimator()
+    loud = CursorIndicatorSnapshot(True, MICROPHONE_COLOR, audio_level=0.5)
+    frames = [animator.update(loud, i / 120).frame for i in range(120)]
+    assert any(math.hypot(f.center_dx, f.center_dy) > 0.05 for f in frames[:30])
+    assert all(math.hypot(f.center_dx, f.center_dy) < 1 for f in frames)
+    assert frames[-1].center_dx == frames[-1].center_dy == 0
+    assert not animator.jostle_armed
+    assert len(animator.impulses) == 0
+
+
+def test_silent_input_has_no_jostle_and_threshold_value_is_safe():
+    for level in (0.0, 0.12, float("nan"), float("inf")):
+        animator = IndicatorAnimator()
+        snapshot = CursorIndicatorSnapshot(True, MICROPHONE_COLOR, audio_level=level)
+        for i in range(700):
+            frame = animator.update(snapshot, i / 120).frame
+            assert frame.center_dx == frame.center_dy == 0
+            assert math.isfinite(frame.radius)
+
+
+def test_flourish_and_audio_motion_are_consistent_across_refresh_rates():
+    results = []
+    for fps in (60, 120, 144, 240):
+        animator = IndicatorAnimator()
+        snapshot = CursorIndicatorSnapshot(True, MICROPHONE_COLOR, audio_level=0.5)
+        for i in range(fps // 6 + 1):
+            frame = animator.update(snapshot, i / fps).frame
+        results.append(frame)
+    baseline = results[0]
+    for frame in results[1:]:
+        assert abs(frame.radius - baseline.radius) < 0.15
+        assert (
+            abs((frame.arc_start + frame.arc_extent) - (baseline.arc_start + baseline.arc_extent))
+            < 0.5
+        )
+        assert (
+            math.hypot(frame.center_dx - baseline.center_dx, frame.center_dy - baseline.center_dy)
+            < 0.05
+        )

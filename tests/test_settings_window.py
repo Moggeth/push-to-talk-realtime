@@ -81,6 +81,8 @@ def test_mode_switch_keeps_phase_and_intro_clock():
     before = animator.update(CursorIndicatorSnapshot(True, (230, 40, 70, 255)), 1)
     after = animator.update(CursorIndicatorSnapshot(True, (230, 40, 70, 255), mode="fun"), 1.01)
     assert after.mode == "fun"
-    assert after.frame.arc_start == pytest.approx((before.frame.arc_start + 1.9) % 360)
+    before_head = (before.frame.arc_start + before.frame.arc_extent) % 360
+    after_head = (after.frame.arc_start + after.frame.arc_extent) % 360
+    assert after_head == pytest.approx((before_head + 1.9) % 360)
     assert after.opacity == 1
     assert animator.intro_started_at == 0

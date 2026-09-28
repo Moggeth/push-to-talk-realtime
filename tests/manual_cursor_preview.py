@@ -22,6 +22,7 @@ def main():
     frames = []
     costs = []
     samples = []
+    entry_samples = []
     for index in range(600):
         now = index / 120
         mode = "raw" if now < 0.8 else "tidy" if now < 1.6 else "fun"
@@ -55,6 +56,11 @@ def main():
             else Image.new("RGBA", (88, 88))
         )
         costs.append(time.perf_counter() - started)
+        if index in (2, 6, 12, 16, 24, 34):
+            entry = Image.new("RGBA", (132, 132), (28, 30, 32, 255))
+            entry.alpha_composite(rendered, (22, 12))
+            ImageDraw.Draw(entry).text((12, 108), f"{now * 1000:.0f} ms", fill="white")
+            entry_samples.append(entry)
         if index % 4 == 0:
             canvas = Image.new("RGBA", (176, 176), (28, 30, 32, 255))
             canvas.alpha_composite(rendered, (44, 44))
@@ -71,6 +77,10 @@ def main():
     for index, sample in enumerate(samples):
         sheet.paste(sample, (index * 176, 0))
     sheet.save(output / "cursor-preview.png")
+    entry_sheet = Image.new("RGBA", (132 * len(entry_samples), 132))
+    for index, sample in enumerate(entry_samples):
+        entry_sheet.paste(sample, (index * 132, 0))
+    entry_sheet.save(output / "cursor-entry-preview.png")
     print(
         f"600 frames: mean={sum(costs) / len(costs) * 1000:.2f}ms "
         f"p95={sorted(costs)[569] * 1000:.2f}ms; 120Hz budget=8.33ms"
