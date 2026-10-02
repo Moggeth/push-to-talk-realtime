@@ -499,3 +499,12 @@ Actual registered settings exported and verified: Interactive/Limited, logon plu
 PT1M indefinite repetition, PT0S execution limit, IgnoreNew, battery-safe settings.
 Task startup status returned True. Settings SHA256 matched pre-repair backup.
 Rollback -WhatIf verified scope without changing running services or settings.
+
+Task result interpretation on DeskMog: while a long-running instance is Running,
+an overlapping start suppressed by IgnoreNew can set LastTaskResult to 2147946720
+(0x800710E0). A five-second same-settings synthetic task reproduced that code on a
+second start and returned to result 0 on completion. Read State, process PIDs and
+supervisor logs together; do not interpret that last-trigger result alone as a
+stopped service. Operational scheduler history was disabled and left unchanged.
+Scheduled-user prerequisite check found API configuration and sounddevice/pynput/
+pystray/openai/PIL/numpy available, using only boolean presence and no mic/API call.
