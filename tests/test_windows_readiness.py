@@ -84,8 +84,7 @@ def test_windowless_bootstrap_failure_is_durable(monkeypatch, tmp_path):
     monkeypatch.setattr(starter, "main", Mock(side_effect=OSError("synthetic bootstrap failure")))
     assert starter.entrypoint() == 1
     assert (
-        "synthetic bootstrap failure"
-        in (tmp_path / "push_to_talk_supervisor_bootstrap.log").read_text()
+        "exception_type=OSError" in (tmp_path / "push_to_talk_supervisor_bootstrap.log").read_text()
     )
 
 

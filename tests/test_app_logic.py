@@ -1666,7 +1666,8 @@ def test_log_writes_timestamped_message_to_file(tmp_path: Path, monkeypatch):
     app.log("hello", "world")
 
     contents = log_path.read_text(encoding="utf-8")
-    assert "hello world" in contents
+    assert "hello world" not in contents
+    assert "details omitted" in contents
     assert "[" in contents
 
 

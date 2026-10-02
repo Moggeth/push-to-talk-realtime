@@ -1,5 +1,39 @@
 # Testing (Plain Language)
 
+## Content-free lifecycle diagnostics (2026-10-02)
+
+`test_runtime_diagnostics.py` verifies strict payload omission (including provider
+exception messages and multiline text), sanitized stack locations, bounded rotation,
+unclean versus deliberate previous exits, corrupt-record handling, stale/mismatched
+health, busy versus listener-down state, logging failure isolation, supervisor launch
+failure/native-like exit/retry events, duplicate launch events, native stack dumps
+without variable contents, and real PowerShell wrapper cold/normal/abnormal exits.
+The Windows support report test reads a synthetic manager log containing a secret
+sentinel and asserts it preserves only failure/exit metadata. No mic/API recording,
+clipboard access or injected hotkey is used. The wrapper test prints sentinels to
+both stdout and stderr and proves they are drained without appearing in diagnostics.
+
+Run this with the existing supervisor/readiness/app/start-script regression suites.
+Use an isolated workspace --basetemp and -p no:cacheprovider when cache ACLs differ.
+Initial tests found duplicate heartbeat keys, a test asserting against its own
+function name, and a Windows PowerShell default-parameter $PSScriptRoot issue;
+resolve script-relative defaults in the body. A further real-child test found
+Get-FileHash missing in a nested PowerShell session despite working interactively.
+The bootstrap now computes hashes with .NET SHA256, avoiding that module dependency.
+These failures were resolved before installation. Do not infer success from only
+the cold-path test: exercise both executable-present and executable-missing paths.
+
+Keep native log handles open until faulthandler is disabled. Do not rotate an open
+native descriptor; startup rotation occurs before installation. Native stack dumps
+contain locations, not source lines or locals (Python faulthandler documentation).
+No forced native crash is required to verify the stack output format.
+
+Live deployment must preserve the app PID while replacing only supervision. Verify
+outer task/Python run correlation, app-health unknown for old app code, and an
+injected supervisor-only failure yielding task python_exited plus a replacement
+supervisor previous_run_unclosed event. App heartbeat/privacy activation remains
+pending until a separately approved app restart. Health is not a queue-drained lease.
+
 ## Windows readiness recovery (2026-10-02)
 
 `tests/test_windows_readiness.py` checks orphan adoption without interruption,
@@ -508,3 +542,9 @@ supervisor logs together; do not interpret that last-trigger result alone as a
 stopped service. Operational scheduler history was disabled and left unchanged.
 Scheduled-user prerequisite check found API configuration and sounddevice/pynput/
 pystray/openai/PIL/numpy available, using only boolean presence and no mic/API call.
+
+Diagnostic acceptance: 180 tests passed in 5.83 seconds; Ruff check/format passed.
+Live diagnostic supervisor-only failure recovered in 34.049 seconds, retaining app
+PID 65208. Task event recorded child exit -1; new supervisor logged previous unclosed
+run with PID/run ID/last heartbeat and reason unknown. Startup wrapper and safe report
+are active; old app privacy/health activation awaits explicit user restart approval.

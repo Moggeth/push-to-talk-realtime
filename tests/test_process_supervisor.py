@@ -23,7 +23,7 @@ def test_restarts_even_zero_exit_until_explicit_intentional_exit(monkeypatch, tm
     assert len(commands) == 4
     assert delays == [2, 4, 8]
     assert commands[0][1]["env"][monitor.SUPERVISED_ENV] == "1"
-    assert commands[0][1]["env"]["PYTHONFAULTHANDLER"] == "1"
+    assert len(commands[0][1]["env"]["PUSH_TO_TALK_PARENT_RUN_ID"]) == 32
     log = (tmp_path / "push_to_talk_supervisor.log").read_text()
     assert "code=3221225477" in log
     assert "Intentional exit" in log

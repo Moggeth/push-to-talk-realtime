@@ -357,6 +357,57 @@ Supervisor logs rotate; child console output rotates between launches. Supervisi
 detects exits, not a frozen live process, and cannot recover audio still held in
 memory at the moment of a crash.
 
+#### Privacy-safe diagnostics (2026-10-02)
+
+`./support_report.ps1` (also `./windows_readiness_status.ps1`) emits a metadata-only
+JSON report. Redirect it to a file when support needs a snapshot. It includes task
+state/result, app/supervisor PIDs, structured lifecycle events, health freshness,
+selected Windows event IDs/times/codes, and recognized manager failure/exit metadata.
+It excludes raw Windows event messages, command lines, environment values,
+legacy app output, transcript databases, clipboard contents and audio. Application
+events for Python are candidates correlated by PID/time, not proof of a PTT crash.
+Task Scheduler Operational history remains in its existing enabled/disabled state.
+
+New diagnostics live under `%LOCALAPPDATA%\PushToTalkRealtime\diagnostics`:
+
+- `{launcher,supervisor,app,task}.events.jsonl`: UTC and elapsed timestamps, PIDs,
+  run/task IDs, source hashes, Python version, launch source, duplicate rejection,
+  exceptions (type/errno/stack locations only), exits, retries and adoption decisions.
+  Each file rotates at 4 MiB with four archives (about 20 MiB per component).
+- `{app,supervisor}.health.json`: atomic current-state snapshots approximately every
+  five seconds; an event heartbeat is retained about every 30 seconds and on state
+  changes. Old snapshots are marked stale after 20 seconds, not called healthy.
+- `native-stacks.log`: Python fault-handler stack locations, without source lines,
+  locals or exception messages; 2 MiB startup rotation with two archives. A fatal
+  stack record can exceed the threshold before the next startup rotates it.
+
+The outer hidden `readiness_task.ps1` records missing files, failure stages and
+Python exits even if the Python launcher cannot import. It drains raw child output
+to a null sink. Structured exception records deliberately omit exception messages,
+because provider errors can contain user content. The app's legacy log sink now
+keeps only fixed categories and redirects investigation to structured events.
+Historical logs/backups are preserved and can still contain old transcript text;
+do not bundle them with support reports. Intended transcript history/work-log output
+is separate and unchanged.
+
+Health reports capture/pending-start flags, active transcription/postprocessing
+counts, setup completion and listener-thread liveness. It explicitly marks
+audio-queue knowledge unavailable. `reported_ready` is not a physical hotkey,
+microphone or API test or a safe-to-restart lease. Progress comes from the tray
+worker, not proof that every GUI/provider thread responds. Stale health is
+diagnostic only: no hang auto-kill.
+
+An unclosed previous run records its last PID/run ID/timestamp and an **unknown**
+disappearance. It does not invent whether Windows termination, power loss, a native
+fault or a user action caused it. Quit/Restart requests and orderly exits have
+separate events. Disk/permission failures increment a diagnostic-write counter;
+missing logs can still limit diagnosis.
+
+App privacy filtering, readiness health and native stacks require an updated app
+start. Restarting only the supervisor does not retrofit these into a running app.
+Obtain approval before interrupting an app whose capture/queue state cannot be
+established. Keep F13 settings and no-idle-capture mode.
+
 #### Windows always-ready installation
 
 Run `./install_windows_readiness.ps1` in PowerShell from this checkout (optionally

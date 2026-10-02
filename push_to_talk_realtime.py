@@ -22,7 +22,6 @@ import subprocess
 import sys
 import threading
 import time
-import traceback
 import webbrowser
 from collections import deque
 from collections.abc import Callable
@@ -61,6 +60,7 @@ from runtime_paths import (
     resolve_runtime_paths,
     rotate_file,
 )
+from runtime_diagnostics import Diagnostics, legacy_summary, enable_native_trace, close_native_trace
 from startup_integration import (
     StartupContext,
 )
@@ -604,13 +604,19 @@ transcript_browser_lock = threading.Lock()
 transcript_browser_server: TranscriptBrowserServer | None = None
 transcript_browser_url = ""
 log_file_failure_reported = False
+APP_DIAGNOSTICS = Diagnostics("app")
+diagnostic_setup_complete = False
+diagnostic_exit_reason = "unknown"
 
 # -------------------- Utilities --------------------
 
 
 def log(*a):
     global log_file_failure_reported
-    message = " ".join(str(part) for part in a)
+    message = legacy_summary(a)
+    for part in a:
+        if isinstance(part, BaseException):
+            APP_DIAGNOSTICS.emit("exception", exception=part, thread_id=threading.get_ident())
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     thread_name = threading.current_thread().name
     line = f"{timestamp} [{thread_name}] {message}"
@@ -631,8 +637,9 @@ def log(*a):
         except Exception as exc:  # pylint: disable=broad-except
             if not log_file_failure_reported:
                 log_file_failure_reported = True
-                sys.stderr.write(f"[Logging] Unable to write log file {LOG_PATH}: {exc}\n")
-                sys.stderr.flush()
+                if sys.stderr is not None:
+                    sys.stderr.write(f"[Logging] write failed: {type(exc).__name__}\n")
+                    sys.stderr.flush()
 
 
 def cursor_indicator_snapshot() -> CursorIndicatorSnapshot:
@@ -707,21 +714,26 @@ def stop_cursor_activity_indicator() -> None:
 def log_unhandled_exception(
     exc_type: type[BaseException], exc_value: BaseException, exc_traceback
 ) -> None:
-    stack = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback)).rstrip()
-    log("[Crash] Unhandled exception:", stack)
+    APP_DIAGNOSTICS.emit("exception", exception=exc_value, reason="unhandled")
+    log("[Crash] Unhandled exception")
 
 
 def log_unhandled_thread_exception(args: threading.ExceptHookArgs) -> None:
-    stack = "".join(
-        traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)
-    ).rstrip()
-    thread_name = getattr(args.thread, "name", "unknown")
-    log(f"[Crash] Unhandled exception in thread {thread_name}:", stack)
+    APP_DIAGNOSTICS.emit(
+        "exception",
+        exception=args.exc_value,
+        reason="thread_unhandled",
+        thread_id=getattr(args.thread, "ident", None),
+    )
+    log("[Crash] Unhandled thread exception")
 
 
 def install_runtime_hooks() -> None:
     sys.excepthook = log_unhandled_exception
     threading.excepthook = log_unhandled_thread_exception
+    sys.unraisablehook = lambda args: APP_DIAGNOSTICS.emit(
+        "exception", exception=args.exc_value, reason="unraisable"
+    )
 
 
 def current_tray_status_signature() -> tuple[str, str, str, str, str, bool, bool]:
@@ -760,6 +772,7 @@ def log_tray_status_change(reason: str = "state change") -> None:
     if signature == tray_status_signature:
         return
     tray_status_signature = signature
+    publish_diagnostic_health(force=True)
     status, mode, device_label, audio_source, transcription_engine, muted_warning, hotkey_ready = (
         signature
     )
@@ -3863,6 +3876,9 @@ def prompt_for_hotkey(_icon=None, _item=None) -> None:
 
 
 def quit_app(icon: TrayIconLike | None = None, _item=None) -> None:
+    global diagnostic_exit_reason
+    diagnostic_exit_reason = "quit"
+    APP_DIAGNOSTICS.emit("shutdown_requested", reason="quit")
     log("[Lifecycle] Quit requested from tray.")
     if is_systemd_managed():
         run_systemd_action("stop")
@@ -3871,6 +3887,9 @@ def quit_app(icon: TrayIconLike | None = None, _item=None) -> None:
 
 
 def restart_app(icon: TrayIconLike | None = None, _item=None) -> None:
+    global diagnostic_exit_reason
+    diagnostic_exit_reason = "restart"
+    APP_DIAGNOSTICS.emit("shutdown_requested", reason="restart")
     log("[Lifecycle] Restart requested from tray.")
     if is_systemd_managed():
         run_systemd_action("restart")
@@ -4402,12 +4421,60 @@ def stop_warm_microphone_watchdog() -> None:
         worker.join(timeout=1.0)
 
 
+def publish_diagnostic_health(*, force: bool = False) -> None:
+    if not APP_DIAGNOSTICS.active:
+        return
+    if not state.lock.acquire(blocking=False):
+        APP_DIAGNOSTICS.heartbeat(
+            force=force,
+            state_lock_available=False,
+            readiness="unknown",
+            progress_source="tray_worker",
+        )
+        return
+    try:
+        snapshot = {
+            "capture_active": state.is_listening,
+            "capture_start_pending": state.session_start_pending,
+            "transcriptions": state.transcribing_session_count,
+            "postprocessing": state.post_processing_session_count,
+            "session_count": state.session_counter,
+            "state_lock_available": True,
+            "queue_state_known": False,
+            "setup_complete": diagnostic_setup_complete,
+            "shutting_down": shutdown_event.is_set(),
+            "pre_roll_enabled": MICROPHONE_PRE_ROLL_ENABLED,
+            "progress_source": "tray_worker",
+        }
+    finally:
+        state.lock.release()
+    snapshot["listener_thread_alive"] = keyboard_listener_is_running()
+    busy = (
+        snapshot["capture_active"]
+        or snapshot["capture_start_pending"]
+        or snapshot["transcriptions"]
+        or snapshot["postprocessing"]
+    )
+    snapshot["readiness"] = (
+        "starting"
+        if not diagnostic_setup_complete
+        else "busy"
+        if busy
+        else "reported_ready"
+        if snapshot["listener_thread_alive"]
+        else "listener_down"
+    )
+    APP_DIAGNOSTICS.heartbeat(force=force, **snapshot)
+
+
 def tray_animation_loop() -> None:
     while not shutdown_event.is_set():
+        publish_diagnostic_health()
         if not keyboard_listener_is_running():
             try:
                 start_keyboard_listener()
                 log("[Hotkey] Keyboard listener restarted.")
+                APP_DIAGNOSTICS.emit("listener_restarted", reason="listener_rebind")
             except Exception as exc:  # pylint: disable=broad-except
                 log("[Hotkey] Unable to restart keyboard listener:", exc)
         if APPINDICATOR_BACKEND:
@@ -4448,7 +4515,7 @@ def start_tray_animation_loop() -> None:
 
 
 def tray_setup(_icon: TrayIconLike) -> None:
-    global tray_status_signature
+    global tray_status_signature, diagnostic_setup_complete
     _icon.visible = True  # required when using a custom setup callback
     start_warm_microphone_watchdog()
     start_cursor_activity_indicator()
@@ -4458,6 +4525,13 @@ def tray_setup(_icon: TrayIconLike) -> None:
     start_transcription_warmup()
     start_tray_animation_loop()
     start_input_listeners()
+    diagnostic_setup_complete = True
+    APP_DIAGNOSTICS.emit(
+        "app_ready",
+        listener_thread_alive=keyboard_listener_is_running(),
+        pre_roll_enabled=MICROPHONE_PRE_ROLL_ENABLED,
+    )
+    publish_diagnostic_health(force=True)
     with state.lock:
         selected_engine = state.transcription_engine
         selected_model = state.recorded_transcription_model
@@ -4492,12 +4566,21 @@ def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
 
 
 def main() -> int:
-    global tray_icon
+    global tray_icon, diagnostic_setup_complete, diagnostic_exit_reason
     install_runtime_hooks()
     instance_guard = acquire_app_instance_guard()
     if instance_guard is None:
+        APP_DIAGNOSTICS.emit("duplicate_rejected", reason="duplicate")
         log("[Startup] Another push-to-talk instance is already running; exiting.")
         return 0
+    diagnostic_setup_complete = False
+    diagnostic_exit_reason = "unknown"
+    native_trace = enable_native_trace(APP_DIAGNOSTICS.root)
+    APP_DIAGNOSTICS.begin(
+        launch_source=os.getenv("PUSH_TO_TALK_LAUNCH_SOURCE", "unknown"),
+        supervised=os.getenv("PUSH_TO_TALK_SUPERVISED") == "1",
+        pre_roll_enabled=MICROPHONE_PRE_ROLL_ENABLED,
+    )
     try:
         moved_files, migration_failures = migrate_legacy_runtime_files(RUNTIME_PATHS, SCRIPT_DIR)
         for source, destination in moved_files:
@@ -4513,14 +4596,22 @@ def main() -> int:
         )
         tray_icon.run(setup=tray_setup)
         if not shutdown_event.is_set():
+            diagnostic_exit_reason = "unexpected_return"
             log("[Lifecycle] Tray loop ended unexpectedly; requesting recovery.")
             return 1
         log("[Lifecycle] Tray loop stopped after shutdown request.")
+        if diagnostic_exit_reason == "unknown":
+            diagnostic_exit_reason = "normal_return"
         return 0
     except KeyboardInterrupt:
+        diagnostic_exit_reason = "keyboard_interrupt"
         log("\nExiting...")
         tray_exit(tray_icon)
         return 0
+    except Exception as exc:
+        diagnostic_exit_reason = "unhandled"
+        APP_DIAGNOSTICS.emit("exception", exception=exc, reason="unhandled")
+        raise
     finally:
         stop_cursor_activity_indicator()
         stop_warm_microphone_watchdog()
@@ -4529,6 +4620,11 @@ def main() -> int:
         stop_transcript_browser()
         shutdown_event.set()
         instance_guard.release()
+        close_native_trace(native_trace)
+        APP_DIAGNOSTICS.end(
+            diagnostic_exit_reason,
+            int(diagnostic_exit_reason in {"unknown", "unhandled", "unexpected_return"}),
+        )
 
 
 if __name__ == "__main__":

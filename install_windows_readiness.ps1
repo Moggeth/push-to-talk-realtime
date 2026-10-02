@@ -11,7 +11,10 @@ New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName $taskName | Set-Content -LiteralPath (Join-Path $backupDir 'task.xml') }
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$action = New-ScheduledTaskAction -Execute $Python -Argument ('"' + $scriptPath + '" --supervise --ptt-only') -WorkingDirectory $PSScriptRoot
+$taskWrapper = Join-Path $PSScriptRoot 'readiness_task.ps1'
+if (-not (Test-Path -LiteralPath $taskWrapper -PathType Leaf)) { throw 'Task wrapper missing' }
+$powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$action = New-ScheduledTaskAction -Execute $powershell -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -File "' + $taskWrapper + '" -Python "' + $Python + '"') -WorkingDirectory $PSScriptRoot
 $logon = New-ScheduledTaskTrigger -AtLogOn -User $user
 $retry = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
 $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
