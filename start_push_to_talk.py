@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from process_supervisor import EXPECTED_EXIT, SUPERVISED_ENV, supervise, wait_for_windows_process
@@ -35,6 +36,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Run the tray app in the current process instead of delegating/detaching.",
     )
     parser.add_argument("--supervise", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--ptt-only", action="store_true", help="Disable idle microphone pre-roll capture."
+    )
     parser.add_argument("--restart-after", type=int, help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
@@ -107,6 +111,10 @@ def run_foreground() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if platform.system() == "Windows":
+        os.environ.setdefault("MICROPHONE_PRE_ROLL_ENABLED", "0")
+    if args.ptt_only:
+        os.environ["MICROPHONE_PRE_ROLL_ENABLED"] = "0"
     if args.restart_after is not None:
         if platform.system() == "Windows":
             if not wait_for_windows_process(args.restart_after):
@@ -121,6 +129,28 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 return 1
     if args.supervise:
+        if platform.system() == "Windows":
+            from windows_instance import (
+                APP_MUTEX,
+                SUPERVISOR_MUTEX,
+                WindowsInstance,
+                instance_exists,
+            )
+
+            with WindowsInstance(SUPERVISOR_MUTEX) as guard:
+                if not guard.acquired:
+                    return 0
+                return supervise(
+                    [
+                        startup_python_executable(sys.executable),
+                        "-u",
+                        str(SCRIPT_PATH),
+                        "--foreground",
+                    ],
+                    SCRIPT_DIR,
+                    LAUNCHER_LOG_PATH,
+                    existing_instance=lambda: instance_exists(APP_MUTEX),
+                )
         return supervise(
             [startup_python_executable(sys.executable), "-u", str(SCRIPT_PATH), "--foreground"],
             SCRIPT_DIR,
@@ -133,5 +163,21 @@ def main(argv: list[str] | None = None) -> int:
     return spawn_detached_background()
 
 
+def entrypoint() -> int:
+    try:
+        return main()
+    except Exception:
+        # Task Scheduler runs pythonw, so no console exists to retain startup failures.
+        path = LAUNCHER_LOG_PATH.with_name("push_to_talk_supervisor_bootstrap.log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rotate_file(path, LAUNCHER_LOG_MAX_BYTES, LAUNCHER_LOG_BACKUP_COUNT)
+        with path.open("a", encoding="utf-8") as output:
+            output.write(
+                f"{time.strftime('%Y-%m-%dT%H:%M:%S')} pid={os.getpid()} launcher failed\n"
+            )
+            traceback.print_exc(file=output)
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(entrypoint())

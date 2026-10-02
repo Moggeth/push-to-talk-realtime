@@ -1231,20 +1231,13 @@ def acquire_app_instance_guard() -> AppInstanceGuard | None:
     if not IS_WINDOWS:
         return AppInstanceGuard()
     try:
-        import ctypes
+        from windows_instance import WindowsInstance
 
-        error_already_exists = 183
-        ctypes.windll.kernel32.SetLastError(0)
-        handle = ctypes.windll.kernel32.CreateMutexW(None, False, APP_INSTANCE_MUTEX_NAME)
-        if not handle:
-            raise ctypes.WinError()
-        if ctypes.windll.kernel32.GetLastError() == error_already_exists:
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return None
-        return AppInstanceGuard(handle=handle)
+        guard = WindowsInstance(APP_INSTANCE_MUTEX_NAME)
+        return guard if guard.acquired else None
     except Exception as exc:  # pylint: disable=broad-except
         log("[Startup] Single-instance guard unavailable:", exc)
-        return AppInstanceGuard()
+        raise  # Fail closed: supervision retries; never register duplicate hotkeys.
 
 
 def restart_helper_command() -> list[str]:

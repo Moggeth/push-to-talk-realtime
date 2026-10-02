@@ -4,9 +4,46 @@ import os
 import platform
 import plistlib
 import subprocess
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+WINDOWS_READINESS_TASK = "PushToTalkRealtime Readiness"
+
+
+def windows_readiness_task_enabled() -> bool | None:
+    """None means no installed readiness task; preserve legacy startup support."""
+    result = subprocess.run(
+        ["schtasks.exe", "/Query", "/TN", WINDOWS_READINESS_TASK, "/XML"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        check=False,
+    )
+    if result.returncode:
+        return None
+    root = ET.fromstring(result.stdout)
+    enabled = root.find("{*}Settings/{*}Enabled")
+    return enabled is None or enabled.text != "false"
+
+
+def set_windows_readiness_task_enabled(enabled: bool) -> None:
+    subprocess.run(
+        [
+            "schtasks.exe",
+            "/Change",
+            "/TN",
+            WINDOWS_READINESS_TASK,
+            "/Enable" if enabled else "/Disable",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        check=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -139,6 +176,9 @@ def is_run_on_startup_enabled(context: StartupContext) -> bool:
             return False
         return result.returncode == 0
     if system == "Windows":
+        task_enabled = windows_readiness_task_enabled()
+        if task_enabled is not None:
+            return task_enabled
         return windows_startup_script_path().exists()
     if system == "Darwin":
         return macos_launch_agent_path(context.macos_launch_agent_name).exists()
@@ -159,6 +199,9 @@ def enable_run_on_startup(context: StartupContext) -> bool:
         )
         return True
     if system == "Windows":
+        if windows_readiness_task_enabled() is not None:
+            set_windows_readiness_task_enabled(True)
+            return True
         startup_path = windows_startup_script_path()
         startup_path.parent.mkdir(parents=True, exist_ok=True)
         startup_path.write_text(render_windows_startup_script(context), encoding="utf-8")
@@ -182,6 +225,8 @@ def disable_run_on_startup(context: StartupContext) -> bool:
         )
         return True
     if system == "Windows":
+        if windows_readiness_task_enabled() is not None:
+            set_windows_readiness_task_enabled(False)
         windows_startup_script_path().unlink(missing_ok=True)
         return True
     if system == "Darwin":

@@ -1,5 +1,35 @@
 # Testing (Plain Language)
 
+## Windows readiness recovery (2026-10-02)
+
+`tests/test_windows_readiness.py` checks orphan adoption without interruption,
+duplicate supervisor exclusion, real mutex release on process death, synthetic
+supervisor death followed by adoption and child crash recovery, fail-closed app
+mutex errors, durable bootstrap exceptions, task-aware startup toggles, and no idle
+microphone startup with pre-roll disabled. Fixtures use unique kernel object names
+and temporary paths; they do not control the live app, hotkeys, clipboard or mic.
+Combined lifecycle/audio/session/startup/supervisor regression: 186 passed in 4.64 s.
+Ruff check and format check passed for all changed Python files.
+
+Use a fresh workspace `--basetemp` on this machine: the shared pytest temp folder
+may reject sandbox access. One cache warning occurred under an existing copied
+pytest cache; it did not affect assertions. Initial synthetic process termination
+with taskkill could not terminate the fixture in the sandbox; the corrected fixture
+signals its own child to `os._exit(7)`, testing abrupt failure without host process
+enumeration. Copied bytecode can display old source paths in pytest; sources under
+the selected worktree still execute. If the execution transport disconnects,
+reconnect before assuming the app or test failed.
+
+Live acceptance must export/inspect the registered task, confirm interactive limited
+user, logon and unlimited one-minute trigger, PT0S execution limit, IgnoreNew and
+battery-safe settings. Terminate only the supervisor PID and observe a new task
+supervisor monitoring the unchanged app PID. Do not kill an active dictation process,
+reboot, log off, inject a hotkey or test the microphone for this check. A synthetic
+task may test fresh launch/crash recovery without importing audio/GUI code.
+
+Limits: process and synthetic tests do not prove physical microphone/API/hotkey
+end-to-end behavior, a real next logon, or recovery from an entirely frozen app.
+
 This project has quick automated checks plus a manual checklist for the audio
 and tray behavior. The automated checks are meant to be fast and verbose.
 
@@ -458,3 +488,14 @@ node tests/transcript_browser_smoke.mjs
 Omit the variable if `playwright` resolves normally. The script disables JavaScript, blocks external requests, verifies filters and selection reset, downloads both formats, checks exact contents, captures desktop/390px mobile previews under ignored `output/transcript-export-qa/`, and closes its own browser. It neither installs dependencies nor accesses the clipboard. This is an isolated fixture test, not a restart or verification of the running tray app.
 
 When editing these Python files on Windows, specify UTF-8 and normalized newlines explicitly; platform-default `Path.write_text()` can create mixed encodings when adding non-ASCII UI punctuation. Filter selects have explicit accessible labels so browser checks do not accidentally include option text in the control name. Reuse the scoped fixtures and avoid broad device/provider suites for this UI-only change.
+
+Live acceptance on DeskMog: task supervisor PID 23864 was terminated alone;
+Task Scheduler replaced it automatically in 52.003 seconds while app PID 65208
+remained unchanged. A separate temporary task using the same principal/settings
+started a synthetic child, observed abrupt code 7, retried after 2 seconds and
+finished with code 0 on its second child; 2.064 seconds total. Test task removed.
+Installed duplicate launcher exited 0 in 0.144 seconds with one app/one supervisor.
+Actual registered settings exported and verified: Interactive/Limited, logon plus
+PT1M indefinite repetition, PT0S execution limit, IgnoreNew, battery-safe settings.
+Task startup status returned True. Settings SHA256 matched pre-repair backup.
+Rollback -WhatIf verified scope without changing running services or settings.

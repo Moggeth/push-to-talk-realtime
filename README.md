@@ -341,7 +341,8 @@ The overlay remains click-through, targets 120 Hz while visible, and idles at 30
 
 ### Unexpected exits on Windows
 
-Start with `python start_push_to_talk.py` to enable process recovery. The tray's
+Start with `python start_push_to_talk.py` to enable process recovery. Without the
+Windows readiness task described below, the tray's
 Quit action deliberately stops recovery too; Restart waits for the old process
 without forcibly terminating it. `--foreground` remains an unsupervised debug mode.
 Launching `push_to_talk_realtime.py` directly also bypasses recovery.
@@ -352,10 +353,58 @@ Diagnostics live in `%LOCALAPPDATA%\PushToTalkRealtime`:
 - `push_to_talk_supervisor_bootstrap.log`: supervisor startup errors and fallback diagnostics.
 - `push_to_talk_realtime.log`: application activity and intentional Quit/Restart requests.
 
-Supervisor logs rotate; child console output rotates between launches. A supervisor
-does not survive being terminated itself, Windows sign-out, or a reboot. Enable
-Run on startup in the tray for sign-in launch. It detects exits, not a frozen live
-process, and cannot recover audio still held in memory at the moment of a crash.
+Supervisor logs rotate; child console output rotates between launches. Supervision
+detects exits, not a frozen live process, and cannot recover audio still held in
+memory at the moment of a crash.
+
+#### Windows always-ready installation
+
+Run `./install_windows_readiness.ps1` in PowerShell from this checkout (optionally
+pass `-Python` with the absolute pythonw.exe path). It installs the current user's
+`PushToTalkRealtime Readiness` task with an interactive, limited token. No password,
+elevation, execution-policy change, or microphone test is required. The task starts
+at sign-in and retries every minute indefinitely, ignores overlapping starts, has
+no execution time limit, and runs on battery without stopping on a power change.
+Sleep/sign-out suspend availability; recovery resumes with the interactive desktop.
+
+The task runs `start_push_to_talk.py --supervise --ptt-only`. The Windows launcher
+defaults idle microphone pre-roll off; `--ptt-only` overrides inherited pre-roll.
+F13, model choices and saved settings are retained. The microphone opens only when
+the user requests capture, with a possible small first-press device-open delay.
+
+Separate session-local mutexes protect the supervisor and app. Mutex errors fail
+closed. A replacement supervisor monitors an existing app without interrupting it,
+then launches a replacement about a second after it exits. Child crash retry delays
+are bounded at 1–60 seconds. Supervisor loss recovers at the next one-minute task
+trigger, subject to Windows scheduling.
+
+Use one startup owner: in Personal Package Manager, turn off autostart and crash
+restart for only `push_to_talk`; set its manual entry to `start_push_to_talk.py`
+with args `["--supervise", "--ptt-only"]`. Leave other packages unchanged.
+Do not launch `push_to_talk_realtime.py` directly: it bypasses supervision and can
+enable idle pre-roll. A manager configuration reload may be needed for manual starts.
+
+Run `./windows_readiness_status.ps1` for task/PID and lifecycle diagnostics without
+dumping transcript text. `push_to_talk_supervisor_bootstrap.log` retains windowless
+launcher exceptions. Process presence does not establish API/device availability.
+
+With the task enabled, **Quit is temporary**: the service returns. The tray's Run
+at login switch disables future task starts without interrupting the running app.
+To pause fully, disable the task, stop only the `--supervise` process (never its
+child/process tree), then Quit. Re-enable/start the task to resume. An older running
+app gets the task-aware tray switch after its next normal restart.
+
+The installer saves previous task XML under
+`%LOCALAPPDATA%\PushToTalkRealtime\startup-backups`. Rollback: disable/remove the
+new task, stop only its supervisor, restore backed-up source and the previous
+push_to_talk manager entry, then restart when idle. Preserve settings/databases.
+The 2026-10-02 repair's task workspace contains originals in `evidence-before`;
+those private logs must not be published.
+
+Incident evidence on 2026-10-02: the manager bypassed supervision and suppressed
+retries after a duplicate-instance clean exit. The detached supervisor lacked
+external recovery. Its final disappearance left no crash/exit record; the exact
+cause remains unknown. Absence alone does not establish a native crash.
 
 
 ## Reviewed local transcript handoff

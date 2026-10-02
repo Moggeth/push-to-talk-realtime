@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -15,7 +16,13 @@ SUPERVISED_ENV = "PUSH_TO_TALK_SUPERVISED"
 EXPECTED_EXIT = 23
 
 
-def supervise(command: list[str], cwd: Path, output_path: Path) -> int:
+def supervise(
+    command: list[str],
+    cwd: Path,
+    output_path: Path,
+    *,
+    existing_instance: Callable[[], bool] | None = None,
+) -> int:
     log_path = output_path.with_name("push_to_talk_supervisor.log")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -35,11 +42,21 @@ def supervise(command: list[str], cwd: Path, output_path: Path) -> int:
                 pass
 
     failures = 0
+    monitoring_existing = False
     environment = dict(os.environ, **{SUPERVISED_ENV: "1", "PYTHONFAULTHANDLER": "1"})
     log(f"Supervisor started pid={os.getpid()}")
     while True:
         started = time.monotonic()
         try:
+            if existing_instance is not None and existing_instance():
+                if not monitoring_existing:
+                    log("Existing app detected; monitoring without interrupting it")
+                    monitoring_existing = True
+                time.sleep(1.0)
+                continue
+            if monitoring_existing:
+                log("Existing app exited; starting replacement")
+                monitoring_existing = False
             rotate_file(output_path, 2 * 1024 * 1024, 2)
             with output_path.open("a", encoding="utf-8") as output:
                 child = subprocess.Popen(
