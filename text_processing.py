@@ -40,6 +40,7 @@ def prepare_clipboard_text(
     normalize_spaces: bool = False,
     capitalize: bool = False,
     terminal_punct: bool = False,
+    bullet_mode: bool = False,
 ) -> str:
     cleaned = apply_punctuation_options(
         text,
@@ -50,6 +51,12 @@ def prepare_clipboard_text(
     if not cleaned:
         return ""
     cleaned = cleaned.rstrip()
+
+    if bullet_mode:
+        # One capture is one list item, even if the provider inserted paragraphs.
+        cleaned = " ".join(cleaned.split())
+        cleaned = re.sub(r"^(?:[-*\u2022]\s+)+", "", cleaned)
+        return f"- {cleaned}\n" if cleaned else ""
 
     if suffix_mode == SUFFIX_NEWLINE:
         return cleaned + "\n"

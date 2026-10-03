@@ -48,6 +48,9 @@ class FakeThread:
 
 @pytest.fixture(autouse=True)
 def reset_app_state(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(
+        app, "mouse_gesture_monitor", SimpleNamespace(start=lambda: None, close=lambda: None)
+    )
     app.stop_cursor_activity_indicator()
     app.stop_warm_microphone_watchdog()
     app.warm_microphone_watchdog_thread = None
@@ -163,6 +166,7 @@ def test_prepare_clipboard_text_uses_state_flags(monkeypatch):
         "hello",
         {
             "suffix_mode": app.SUFFIX_NEWLINE,
+            "bullet_mode": False,
             "normalize_spaces": True,
             "capitalize": True,
             "terminal_punct": True,
@@ -305,7 +309,7 @@ def test_start_recorder_with_fallback_returns_false_when_no_other_device(monkeyp
 def test_paste_text_copies_prepared_text_and_sends_shortcut(monkeypatch):
     copied = []
     paste_calls = []
-    monkeypatch.setattr(app, "prepare_clipboard_text", lambda text: f"{text} ")
+    monkeypatch.setattr(app, "prepare_clipboard_text", lambda text, **_: f"{text} ")
     monkeypatch.setattr(app.pyperclip, "copy", copied.append)
     monkeypatch.setattr(app.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(app, "send_paste_shortcut", lambda: paste_calls.append("sent"))
@@ -328,7 +332,7 @@ def test_paste_text_uses_remembered_target_before_shortcut(monkeypatch):
         thread_id=1,
         process_id=2,
     )
-    monkeypatch.setattr(app, "prepare_clipboard_text", lambda text: f"{text} ")
+    monkeypatch.setattr(app, "prepare_clipboard_text", lambda text, **_: f"{text} ")
     monkeypatch.setattr(app.pyperclip, "copy", copied.append)
     monkeypatch.setattr(app, "try_insert_text_into_target", lambda text, paste_target: True)
     monkeypatch.setattr(app, "send_paste_shortcut", lambda: shortcut_calls.append("sent"))
@@ -352,7 +356,7 @@ def test_paste_text_skips_active_paste_when_windows_foreground_changed(monkeypat
         process_id=2,
     )
     monkeypatch.setattr(app, "IS_WINDOWS", True)
-    monkeypatch.setattr(app, "prepare_clipboard_text", lambda text: text)
+    monkeypatch.setattr(app, "prepare_clipboard_text", lambda text, **_: text)
     monkeypatch.setattr(app.pyperclip, "copy", copied.append)
     monkeypatch.setattr(app, "try_insert_text_into_target", lambda text, paste_target: False)
     monkeypatch.setattr(app, "foreground_matches_paste_target", lambda paste_target: False)
@@ -367,7 +371,7 @@ def test_paste_text_skips_active_paste_when_windows_foreground_changed(monkeypat
 
 def test_paste_text_returns_false_for_blank_prepared_text(monkeypatch):
     copied = []
-    monkeypatch.setattr(app, "prepare_clipboard_text", lambda _text: "   ")
+    monkeypatch.setattr(app, "prepare_clipboard_text", lambda _text, **_: "   ")
     monkeypatch.setattr(app.pyperclip, "copy", copied.append)
 
     result = app.paste_text("Hello")
@@ -378,7 +382,7 @@ def test_paste_text_returns_false_for_blank_prepared_text(monkeypatch):
 
 def test_paste_text_returns_false_when_shortcut_fails(monkeypatch):
     copied = []
-    monkeypatch.setattr(app, "prepare_clipboard_text", lambda text: text)
+    monkeypatch.setattr(app, "prepare_clipboard_text", lambda text, **_: text)
     monkeypatch.setattr(app.pyperclip, "copy", copied.append)
     monkeypatch.setattr(app.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
@@ -718,6 +722,7 @@ def test_save_settings_to_disk_includes_hotkeys(monkeypatch, tmp_path: Path):
         "rewrite_profiles": {},
         "feedback": {key: getattr(app.state, key) for key in app.SETTINGS_FLAGS},
         "paste_suffix_mode": app.state.paste_suffix_mode,
+        "mouse_gesture_enabled": True,
         "input_device_label": app.state.dictation_device_label,
     }
 
@@ -2100,6 +2105,7 @@ def test_menu_builders_include_expected_top_level_items(monkeypatch):
         "Mute monitor",
     ]
     assert [item.text for item in menu] == [
+        "Bullet mode",
         "Mode: Raw",
         "Transcript history",
         "Usage & cost",

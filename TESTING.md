@@ -1,5 +1,22 @@
 # Testing (Plain Language)
 
+## Mouse Gesture and Bullet Dictation (2026-10-03)
+
+`tests/test_mouse_gestures.py` uses synthetic coordinates only. It checks four-leg
+recognition, long stationary lead-in, cooldown/rearm, jitter/drag/horizontal/slow
+rejection, session boundaries, no inactive pointer reads, recovery from sampling
+errors, held-key gating, release/stale-session rejection, Shift release, saved
+disable setting, per-capture mode latching, and bullet clipboard formatting.
+Existing app tests cover menu/settings integration and output fallback behavior.
+All pointer/input/clipboard test dependencies are mocked or dummy backends.
+Raw transcript archival and rewrite behavior are unchanged; bullets affect output
+formatting, not raw text. No Enter injection was added.
+
+Full workspace suite passed 424 tests in 28.41 seconds before final diagnostic-only
+additions. Follow-up gesture/app/diagnostic regression: 178 passed in 4.93 seconds.
+Physical gesture feel and target-editor paste interpretation need normal user
+validation after tray Restart. No Computer Use or app restart was performed.
+
 ## Learned Transcription Progress (2026-10-03)
 
 `tests/test_transcription_progress.py` covers model/engine isolation, cold starts,

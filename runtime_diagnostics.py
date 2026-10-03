@@ -22,6 +22,8 @@ MAX_BYTES = 4 * 1024 * 1024
 BACKUPS = 4
 COMPONENTS = {"app", "launcher", "supervisor", "manager", "task"}
 EVENTS = {
+    "bullet_mode_changed",
+    "gesture_setting_changed",
     "rewrite_review",
     "started",
     "heartbeat",
@@ -73,6 +75,8 @@ NUMBERS = {
     "recovery_count",
 }
 BOOLEANS = {
+    "bullet_mode",
+    "gesture_enabled",
     "replace_available",
     "popup_mapped",
     "capture_active",

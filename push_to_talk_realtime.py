@@ -30,6 +30,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from usage_tracking import UsageMeter, UsageStore, usage_path
 from transcription_progress import TimingEstimator
+from mouse_gestures import GestureMonitor
 from rewrite_review import RewriteReviewManager
 from output_transaction import output_transaction
 from pathlib import Path
@@ -500,6 +501,8 @@ class SessionState:
     indicator_jobs: dict[int, JobView] = field(default_factory=dict)
     indicator_terminals: deque = field(default_factory=lambda: deque(maxlen=16))
     paste_suffix_mode: str = DEFAULT_SUFFIX_MODE
+    bullet_mode: bool = False
+    mouse_gesture_enabled: bool = True
     punctuation_terminal: bool = True
     punctuation_capitalize: bool = False
     punctuation_normalize_spaces: bool = False
@@ -677,6 +680,7 @@ def _primary_cursor_snapshot() -> CursorIndicatorSnapshot:
         audio_source = state.active_audio_source
         rewrite_mode = state.recording_rewrite_mode
         show_labels = state.show_mode_labels
+        bullet_mode = state.bullet_mode and state.mode == MODE_DICTATION
         is_post_processing = state.is_post_processing
         rms = state.last_audio_rms
         audio_age = time.monotonic() - state.last_audio_time
@@ -691,7 +695,8 @@ def _primary_cursor_snapshot() -> CursorIndicatorSnapshot:
         return CursorIndicatorSnapshot(
             True,
             color,
-            label=rewrite_mode.title() if show_labels else "",
+            label=(rewrite_mode.title() if show_labels else "")
+            + (" \u2022 \u2022 \u2022" if bullet_mode else ""),
             mode=rewrite_mode,
             audio_level=min(1.0, max(0.0, rms * 12.0)) if audio_age < 0.25 else 0.0,
         )
@@ -944,6 +949,7 @@ def _save_settings_to_disk() -> bool:
             "rewrite_profiles": state.rewrite_profiles,
             "feedback": {key: getattr(state, key) for key in SETTINGS_FLAGS},
             "paste_suffix_mode": state.paste_suffix_mode,
+            "mouse_gesture_enabled": state.mouse_gesture_enabled,
             "input_device_label": state.dictation_device_label,
         }
     try:
@@ -1037,6 +1043,8 @@ def apply_persisted_settings() -> None:
                 if isinstance(feedback.get(key), bool):
                     setattr(state, key, feedback[key])
         suffix = settings.get("paste_suffix_mode")
+        if isinstance(settings.get("mouse_gesture_enabled"), bool):
+            state.mouse_gesture_enabled = settings["mouse_gesture_enabled"]
         if suffix in (SUFFIX_NONE, SUFFIX_SPACE, SUFFIX_NEWLINE):
             state.paste_suffix_mode = suffix
     HOTKEY_WORKLOG = worklog_hotkey
@@ -1098,7 +1106,7 @@ def apply_punctuation_options(text: str) -> str:
     )
 
 
-def prepare_clipboard_text(text: str) -> str:
+def prepare_clipboard_text(text: str, *, bullet_mode: bool = False) -> str:
     with state.lock:
         suffix_mode = state.paste_suffix_mode
         normalize_spaces = state.punctuation_normalize_spaces
@@ -1107,6 +1115,7 @@ def prepare_clipboard_text(text: str) -> str:
     return prepare_clipboard_text_core(
         text,
         suffix_mode=suffix_mode,
+        bullet_mode=bullet_mode,
         normalize_spaces=normalize_spaces,
         capitalize=capitalize,
         terminal_punct=terminal_punct,
@@ -1419,18 +1428,18 @@ def enforce_transcription_engine_dependencies() -> None:
             state.recorded_transcription_model = "gpt-transcribe"
 
 
-def paste_text(text: str, target: PasteTarget | None = None):
+def paste_text(text: str, target: PasteTarget | None = None, *, bullet_mode: bool = False):
     try:
         with output_transaction():
-            return _paste_text_unlocked(text, target)
+            return _paste_text_unlocked(text, target, bullet_mode=bullet_mode)
     except Exception as exc:
         log("[Paste] Output transaction unavailable:", type(exc).__name__)
         return False
 
 
-def _paste_text_unlocked(text: str, target: PasteTarget | None = None):
+def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet_mode=False):
     """Paste text into the remembered control when possible, then fall back safely."""
-    prepared = prepare_clipboard_text(text)
+    prepared = prepare_clipboard_text(text, bullet_mode=bullet_mode)
     if not prepared or not prepared.strip():
         return False
     pyperclip.copy(prepared)
@@ -2575,6 +2584,7 @@ class CaptureTimestamps:
     stream_ready_at: float
     first_audio_at: float
     rewrite_mode: str = "raw"
+    bullet_mode: bool = False
 
 
 def _clear_pending_session_start_locked() -> None:
@@ -2755,6 +2765,7 @@ def finish_capture_session(session_id: int) -> CaptureTimestamps:
             state.active_stream_ready_at,
             state.active_first_audio_at,
             state.recording_rewrite_mode,
+            state.bullet_mode,
         )
         if state.active_session_id == session_id:
             _clear_active_session_locked()
@@ -2780,6 +2791,7 @@ class TranscriptionOutcome:
     audio_duration_s: float
     error: Exception | None = None
     review_raw: str = ""
+    bullet_mode: bool = False
 
 
 class RealtimeAudioBuffer:
@@ -3040,7 +3052,7 @@ def deliver_session_output(
             if outcome.review_raw:
                 show_rewrite_review(outcome.review_raw, outcome.final_text)
             return
-        prepared_final = prepare_clipboard_text(outcome.final_text)
+        prepared_final = prepare_clipboard_text(outcome.final_text, bullet_mode=outcome.bullet_mode)
         live_applied = False
         review_token = None
         pasted = False
@@ -3062,14 +3074,21 @@ def deliver_session_output(
             elif rewrite_review_manager is not None:
                 with suppress(Exception):
                     rewrite_review_manager.dismiss()
-            pasted = paste_text(outcome.final_text, paste_target)
+            pasted = (
+                paste_text(outcome.final_text, paste_target, bullet_mode=True)
+                if outcome.bullet_mode
+                else paste_text(outcome.final_text, paste_target)
+            )
             if pasted:
                 log("[Pasted] Transcript output completed.")
             else:
                 log("[Clipboard] Transcript copied, but paste was not sent.")
         if outcome.review_raw:
             show_rewrite_review(
-                prepare_clipboard_text(outcome.review_raw), prepared_final, review_token, pasted
+                prepare_clipboard_text(outcome.review_raw, bullet_mode=outcome.bullet_mode),
+                prepared_final,
+                review_token,
+                pasted,
             )
     except Exception:
         result = "error"
@@ -3301,7 +3320,7 @@ def start_listening(
     deliver_session_output(
         session_id=session_id,
         mode=mode,
-        outcome=outcome,
+        outcome=replace(outcome, bullet_mode=capture_timestamps.bullet_mode),
         recorded_model=recorded_transcription_model,
         paste_target=paste_target,
         live_typing_enabled=live_typing_enabled,
@@ -3788,6 +3807,52 @@ def set_paste_suffix_mode(mode: str) -> None:
     refresh_tray_menu()
 
 
+def gesture_recording_token() -> int | None:
+    with state.lock:
+        return _gesture_recording_token_locked()
+
+
+def _gesture_recording_token_locked() -> int | None:
+    if (
+        state.mouse_gesture_enabled
+        and state.is_listening
+        and state.mode == MODE_DICTATION
+        and not state.should_stop
+        and not shutdown_event.is_set()
+        and state.active_stop_hotkey_tokens
+        and set(state.active_stop_hotkey_tokens).issubset(state.pressed_keys)
+    ):
+        return state.active_session_id
+    return None
+
+
+def toggle_bullet_mode(_icon=None, _item=None, *, recording_token=None) -> None:
+    with state.lock:
+        if recording_token is not None and _gesture_recording_token_locked() != recording_token:
+            return
+        state.bullet_mode = not state.bullet_mode
+        enabled = state.bullet_mode
+    log("[Bullets]", "Enabled" if enabled else "Disabled")
+    APP_DIAGNOSTICS.emit("bullet_mode_changed", bullet_mode=enabled)
+    refresh_tray_menu()
+
+
+def toggle_mouse_gesture(_icon=None, _item=None) -> None:
+    with state.lock:
+        state.mouse_gesture_enabled = not state.mouse_gesture_enabled
+        enabled = state.mouse_gesture_enabled
+    APP_DIAGNOSTICS.emit("gesture_setting_changed", gesture_enabled=enabled)
+    save_settings_to_disk()
+    refresh_tray_menu()
+
+
+mouse_gesture_monitor = GestureMonitor(
+    gesture_recording_token,
+    lambda token: toggle_bullet_mode(recording_token=token),
+    log,
+)
+
+
 def toggle_dictation_history(_icon=None, _item=None) -> None:
     with state.lock:
         state.dictation_history_enabled = not state.dictation_history_enabled
@@ -4271,6 +4336,11 @@ def build_cleanup_settings_menu() -> pystray.Menu:
 def build_shortcuts_startup_menu() -> pystray.Menu:
     return pystray.Menu(
         pystray.MenuItem(
+            "Shake while holding: toggle bullets",
+            toggle_mouse_gesture,
+            checked=lambda _item: state.mouse_gesture_enabled,
+        ),
+        pystray.MenuItem(
             f"Dictation: {compact_menu_value(dictation_hotkey_summary(), 28)}...",
             prompt_for_hotkey,
         ),
@@ -4515,6 +4585,9 @@ def build_settings_menu() -> pystray.Menu:
 def build_menu() -> pystray.Menu:
     return pystray.Menu(
         pystray.MenuItem(
+            "Bullet mode", toggle_bullet_mode, checked=lambda _item: state.bullet_mode
+        ),
+        pystray.MenuItem(
             lambda _item: "Mode: "
             + (
                 state.recording_rewrite_mode.title()
@@ -4758,6 +4831,10 @@ def main() -> int:
             log(f"[Storage] Unable to migrate {source}: {exc}")
         refresh_device_list()
         TRANSCRIPTION_TIMINGS.start(RUNTIME_PATHS.log.parent / "transcription_timings.db")
+        try:
+            mouse_gesture_monitor.start()
+        except Exception as exc:
+            log("[Gesture] Monitor could not start; tray bullet toggle remains available:", exc)
         tray_icon = pystray.Icon(
             "push_to_talk_realtime",
             create_tray_icon_image(),
@@ -4784,6 +4861,7 @@ def main() -> int:
         raise
     finally:
         TRANSCRIPTION_TIMINGS.close()
+        mouse_gesture_monitor.close()
         stop_cursor_activity_indicator()
         stop_warm_microphone_watchdog()
         warm_microphone_capture.stop()
