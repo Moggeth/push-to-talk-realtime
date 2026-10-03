@@ -22,6 +22,7 @@ MAX_BYTES = 4 * 1024 * 1024
 BACKUPS = 4
 COMPONENTS = {"app", "launcher", "supervisor", "manager", "task"}
 EVENTS = {
+    "rewrite_review",
     "started",
     "heartbeat",
     "stopped",
@@ -72,6 +73,8 @@ NUMBERS = {
     "recovery_count",
 }
 BOOLEANS = {
+    "replace_available",
+    "popup_mapped",
     "capture_active",
     "capture_start_pending",
     "listener_thread_alive",
@@ -91,6 +94,14 @@ TOKENS = {
     "launch_source": {"scheduled_task", "package_manager", "manual", "restart", "unknown"},
     "mode": {"foreground", "supervise", "detached"},
     "reason": {
+        "capture_timeout",
+        "helper_start_failed",
+        "helper_pipe_closed",
+        "helper_response_failed",
+        "helper_exited",
+        "helper_queue_full",
+        "helper_error",
+        "visible",
         "quit",
         "restart",
         "sigterm",

@@ -522,3 +522,34 @@ The native cursor surface is 96 x 96, supersampled at 4x and targeting 120 Hz.
 The existing tray colors, capture shortcuts, output ordering and clipboard
 behavior are unchanged. Use tray **Restart** after updating to load the changes;
 finish any active recording/transcription first.
+
+## Rewrite Comparison
+
+After a successful Tidy/Fun rewrite, the processed version is still preferred
+and pasted automatically. A non-activating comparison popup shows Processed and
+Raw together. It lasts six seconds (five fully visible, one fading); hovering
+holds it open, leaving starts a one-second fade, and re-entering restores opacity.
+Use raw switches the inserted text back; Use processed switches it forward again.
+Raw and processed remain available in Transcript history after the popup closes.
+Selected-text Tidy also shows the comparison after successful replacement.
+
+Replacement is conservative: Windows UI Automation must verify the exact field,
+unchanged surrounding text, inserted text and caret. Unsupported editors, moved
+focus/caret, further edits, clipboard-only delivery and live-typing correction
+use Copy raw instead. The popup never blindly sends Undo or deletes a character
+count. It never sends Enter. Existing capture, paste ordering and archive behavior
+remain unchanged. Some editors, including Electron apps with accessibility
+disabled, may only support copying; physical Codex-editor acceptance is pending.
+
+The optional UI lives in a separate helper process, started only for rewrites.
+Accessibility capture waits at most 250 ms; a stalled helper is stopped and
+can recover independently of recording. A shared Windows output mutex serializes
+regular dictation output with popup replacements. No transcript is placed on
+the command line or in popup logs/temp files; IPC is in-memory and bounded.
+`comtypes` is the lightweight Windows-only UI Automation dependency. Set
+`PUSH_TO_TALK_REWRITE_REVIEW=0` before launch to disable the popup without disabling
+rewrites. Helper health events are in `diagnostics/app.events.jsonl` under
+`rewrite_review`; they contain only allowlisted state metadata, not text.
+
+Load the update with tray Restart when convenient. The running app is deliberately
+not restarted during implementation or verification.

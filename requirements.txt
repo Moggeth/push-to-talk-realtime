@@ -8,3 +8,4 @@ python-dotenv
 sounddevice
 soundcard
 websockets
+comtypes; sys_platform == 'win32'

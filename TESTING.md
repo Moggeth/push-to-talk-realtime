@@ -579,3 +579,24 @@ Opus 5.5 supplied the independent outer-orbit motion specification. Integration
 preserves the existing primary animator instead of replacing it. Native desktop
 acceptance still needs a real record/release/re-record cycle after restarting;
 offline frames cannot verify monitor refresh or the physical mouse gesture.
+
+## Rewrite Comparison
+
+`tests/test_rewrite_review.py` tests the six-second lifetime, indefinite hover,
+one-second leave fade and re-entry rescue; exact-range replacement, repeated text,
+emoji, provider newline conventions, reversal to processed, caret restoration
+after injection failure, refusal after edits/focus/caret changes, and bounded
+helper capture failure. All are headless; they neither open windows nor send
+real keystrokes. Existing delivery and selected-text tests remain in the suite.
+
+`python tests/manual_rewrite_review.py` is an OPTIONAL, visible Windows fixture
+using synthetic text and no microphone/API calls. Do not run it or Computer Use
+while the user is using their desktop without explicit agreement. It self-closes
+after three minutes. An accessibility client must not synchronously wait on the
+UI thread of the editor being inspected: UIA needs that thread to service calls.
+The fixture therefore captures on a worker, as real delivery does.
+
+Native popup creation and preservation of the synthetic editor's focus were
+observed; the full physical one-click workflow was not completed. The user stopped
+Computer Use and requested background-only verification. Do not describe unit
+tests as acceptance of every editor or of the Codex composer.

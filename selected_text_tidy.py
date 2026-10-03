@@ -60,6 +60,8 @@ class SelectedTextTidyDependencies:
     notify: Callable[[str], None]
     busy: Callable[[], bool]
     log: Callable[[str], None] = lambda _: None
+    before_paste: Callable[[object], object] = lambda _: None
+    after_paste: Callable[[str, str, object], None] = lambda *_: None
 
 
 class SelectedTextTidyJob:
@@ -199,6 +201,7 @@ class SelectedTextTidyJob:
             if self._changed(snapshot) or self._d.clipboard_sequence() != owned_sequence:
                 recover("target changed before clipboard write")
                 return
+            review_token = self._d.before_paste(target)
             self._d.clipboard_write(final)
             final_sequence = self._d.clipboard_sequence()
             if self._d.clipboard_read() != final:
@@ -213,6 +216,7 @@ class SelectedTextTidyJob:
             outcome = "completed"
             self._d.archive_final(entry_id, final, "completed", "")
             self._d.notify("Selected-text Tidy complete.")
+            self._d.after_paste(raw, final, review_token)
         except Exception as exc:  # intentionally never logs selected text
             outcome = "failed"
             self._d.log(f"[Selected Tidy] failure={type(exc).__name__}")

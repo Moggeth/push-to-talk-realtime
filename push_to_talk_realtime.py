@@ -14,6 +14,7 @@ Notes
 """
 
 import json
+import atexit
 import os
 import platform
 import queue
@@ -28,6 +29,8 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from usage_tracking import UsageMeter, UsageStore, usage_path
+from rewrite_review import RewriteReviewManager
+from output_transaction import output_transaction
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -1155,7 +1158,39 @@ def post_process_instructions(profile: str) -> str:
     )
 
 
+rewrite_review_manager: RewriteReviewManager | None = None
+
+
+def review_diagnostic(message, *details):
+    reason = message.removeprefix("[Review] ")
+    APP_DIAGNOSTICS.emit(
+        "rewrite_review",
+        reason=reason,
+        replace_available=bool(details[0]) if reason == "visible" and details else False,
+        popup_mapped=bool(details[1]) if reason == "visible" and len(details) > 1 else False,
+    )
+
+
+def capture_rewrite_review(target):
+    try:
+        return rewrite_review_manager.capture(target) if rewrite_review_manager else None
+    except Exception as exc:
+        log("[Review] capture_failed", type(exc).__name__)
+        return None
+
+
+def show_rewrite_review(raw, processed, token=None, pasted=False):
+    try:
+        if rewrite_review_manager is not None:
+            rewrite_review_manager.show(raw, processed, token, pasted)
+    except Exception as exc:
+        log("[Review] show_failed", type(exc).__name__)
+
+
 def metered_rewrite_request(**request):
+    if rewrite_review_manager is not None:
+        with suppress(Exception):
+            rewrite_review_manager.start()
     if request.get("model") == "gpt-6.1-sol":
         request["reasoning"] = {"effort": "low"}
         request["max_output_tokens"] = max(8192, request.get("max_output_tokens", 0))
@@ -1179,6 +1214,8 @@ def post_process_transcript(text: str, model: str, instructions: str) -> str:
         input=cleaned,
         store=False,
     )
+    if getattr(response, "status", None) == "incomplete":
+        raise ValueError("Rewrite response was incomplete")
     return (response.output_text or "").strip()
 
 
@@ -1283,6 +1320,8 @@ def get_selected_text_tidy_job() -> SelectedTextTidyJob:
                 notify=notify_selected_text_tidy,
                 busy=selected_text_tidy_busy,
                 log=log,
+                before_paste=lambda target: capture_rewrite_review(target),
+                after_paste=lambda raw, final, token: show_rewrite_review(raw, final, token, True),
             )
         )
     return selected_text_tidy_job
@@ -1379,6 +1418,15 @@ def enforce_transcription_engine_dependencies() -> None:
 
 
 def paste_text(text: str, target: PasteTarget | None = None):
+    try:
+        with output_transaction():
+            return _paste_text_unlocked(text, target)
+    except Exception as exc:
+        log("[Paste] Output transaction unavailable:", type(exc).__name__)
+        return False
+
+
+def _paste_text_unlocked(text: str, target: PasteTarget | None = None):
     """Paste text into the remembered control when possible, then fall back safely."""
     prepared = prepare_clipboard_text(text)
     if not prepared or not prepared.strip():
@@ -1407,7 +1455,7 @@ def send_backspaces(count: int) -> None:
     if count <= 0:
         return
     controller = pynput_keyboard.Controller()
-    with output_keyboard_lock:
+    with output_keyboard_lock, output_transaction():
         for _ in range(count):
             controller.press(pynput_keyboard.Key.backspace)
             controller.release(pynput_keyboard.Key.backspace)
@@ -1417,7 +1465,7 @@ def type_text_direct(text: str) -> None:
     if not text:
         return
     controller = pynput_keyboard.Controller()
-    with output_keyboard_lock:
+    with output_keyboard_lock, output_transaction():
         controller.type(text)
 
 
@@ -2729,6 +2777,7 @@ class TranscriptionOutcome:
     transcription_ms: float
     audio_duration_s: float
     error: Exception | None = None
+    review_raw: str = ""
 
 
 class RealtimeAudioBuffer:
@@ -2800,6 +2849,7 @@ def finalize_session_transcription(
     transcript_text = ""
     engine_used = transcription_engine
     final_text = ""
+    review_raw = ""
     error: Exception | None = None
     try:
         if use_realtime and realtime_worker is not None and realtime_stop_event is not None:
@@ -2884,6 +2934,7 @@ def finalize_session_transcription(
                 if not processed_text:
                     raise ValueError("GPT returned an empty transcript")
                 post_process_status = "completed"
+                review_raw = transcript_text
                 elapsed_ms = (time.perf_counter() - post_process_started_at) * 1000.0
                 log(
                     f"[Post-process] {post_process_model_label(post_process_model)} "
@@ -2912,6 +2963,7 @@ def finalize_session_transcription(
         transcription_ms=(time.perf_counter() - started_at) * 1000.0,
         audio_duration_s=audio_duration_s,
         error=error,
+        review_raw=review_raw,
     )
 
 
@@ -2971,9 +3023,13 @@ def deliver_session_output(
             append_dictation_history_entry(outcome.final_text)
         log("\n[Final]:", outcome.final_text)
         if not PASTE_ON_RELEASE:
+            if outcome.review_raw:
+                show_rewrite_review(outcome.review_raw, outcome.final_text)
             return
         prepared_final = prepare_clipboard_text(outcome.final_text)
         live_applied = False
+        review_token = None
+        pasted = False
         live_text = ""
         if live_typing_enabled:
             with realtime_delta_lock:
@@ -2987,10 +3043,20 @@ def deliver_session_output(
                 "skipped final paste to avoid duplicates."
             )
         elif not live_applied:
-            if paste_text(outcome.final_text, paste_target):
+            if outcome.review_raw:
+                review_token = capture_rewrite_review(paste_target)
+            elif rewrite_review_manager is not None:
+                with suppress(Exception):
+                    rewrite_review_manager.dismiss()
+            pasted = paste_text(outcome.final_text, paste_target)
+            if pasted:
                 log("[Pasted] Transcript output completed.")
             else:
                 log("[Clipboard] Transcript copied, but paste was not sent.")
+        if outcome.review_raw:
+            show_rewrite_review(
+                prepare_clipboard_text(outcome.review_raw), prepared_final, review_token, pasted
+            )
     except Exception:
         result = "error"
         raise
@@ -4651,6 +4717,10 @@ def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
 
 
 def main() -> int:
+    global rewrite_review_manager
+    if IS_WINDOWS and os.getenv("PUSH_TO_TALK_REWRITE_REVIEW", "1") != "0":
+        rewrite_review_manager = RewriteReviewManager(review_diagnostic)
+        atexit.register(rewrite_review_manager.close)
     global tray_icon, diagnostic_setup_complete, diagnostic_exit_reason
     install_runtime_hooks()
     instance_guard = acquire_app_instance_guard()
