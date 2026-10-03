@@ -15,6 +15,8 @@ from typing import Any
 
 import numpy as np
 
+from usage_tracking import UsageMeter
+
 
 @dataclass(frozen=True)
 class RecordedTranscriptionConfig:
@@ -61,7 +63,10 @@ def transcribe_recording(
     }
     if config.prompt:
         request["prompt"] = config.prompt
-    response = client.audio.transcriptions.create(**request)
+    with UsageMeter(config.model, "transcription") as meter:
+        meter.seconds = len(pcm) / config.sample_rate
+        response = client.audio.transcriptions.create(**request)
+        meter.usage = getattr(response, "usage", None)
     return getattr(response, "text", "") or ""
 
 
@@ -121,6 +126,7 @@ def run_live_session(
     config: LiveTranscriptionConfig,
     on_delta: Callable[[str], None] | None = None,
     cancel_event: threading.Event | None = None,
+    meter: UsageMeter | None = None,
 ) -> str:
     websocket.send(json.dumps(build_live_session_update(config)))
     session_ready_deadline = time.monotonic() + config.session_ready_timeout_s
@@ -160,6 +166,8 @@ def run_live_session(
                     )
                 )
                 sent_audio = True
+                if meter is not None:
+                    meter.seconds += len(pcm) / config.input_sample_rate
 
             if stop_event.is_set() and audio_queue.empty():
                 if not sent_audio:
@@ -204,6 +212,8 @@ def run_live_session(
             if on_delta is not None and transcript and item_id not in items_with_deltas:
                 on_delta(transcript)
             if committed:
+                if meter is not None:
+                    meter.completed = True
                 return " ".join(text for text in completed_by_item.values() if text).strip()
 
 
@@ -216,13 +226,16 @@ def transcribe_live_stream(
 ) -> str:
     from websockets.sync.client import connect
 
-    with connect(
-        config.websocket_url,
-        additional_headers={"Authorization": f"Bearer {config.api_key}"},
-        open_timeout=config.session_ready_timeout_s,
-        close_timeout=2,
-        max_size=2**22,
-    ) as websocket:
+    with (
+        UsageMeter(config.model, "live transcription", completed=False) as meter,
+        connect(
+            config.websocket_url,
+            additional_headers={"Authorization": f"Bearer {config.api_key}"},
+            open_timeout=config.session_ready_timeout_s,
+            close_timeout=2,
+            max_size=2**22,
+        ) as websocket,
+    ):
         return run_live_session(
             websocket,
             audio_queue,
@@ -230,4 +243,5 @@ def transcribe_live_stream(
             config,
             on_delta,
             cancel_event,
+            meter,
         )

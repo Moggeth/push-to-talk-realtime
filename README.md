@@ -473,3 +473,26 @@ Raw and final text are separate fields. Missing final text stays empty in JSON a
 The server binds each preview to the selected IDs and complete current rows. If a selected entry is finalized, edited or deleted before download, the export fails as a whole; open a fresh preview. Stale forms from an earlier browser-server run are rejected. Previously saved archive entries remain available after reopening the browser, but selection and acknowledgement must be made again. No temporary export files or preview copies are retained by the server. Preview/download diagnostics emit timestamped count/format events through the existing app logger without transcript text.
 
 This flow uses server-rendered forms and works without JavaScript. It requires the local transcript-browser server; a downloaded HTML page is not a separate archive application. Verification instructions and the safe synthetic-only launcher are in `TESTING.md`; implementation timings and review findings are in `docs/2026-09-23-transcript-export.md`.
+# Usage and Cost
+
+The tray's **Usage & cost** opens a content-free monthly report. Tracking starts
+with this version; previous usage is not reconstructed. The independent SQLite
+ledger lives beside the runtime log as `usage.db` (override with
+`PUSH_TO_TALK_USAGE_DB_PATH`). Deleting transcript history does not delete usage.
+Run `python usage_tracking.py --month YYYY-MM` to inspect another calendar month.
+
+Published rates checked 2026-10-03: GPT Transcribe US$0.0045/minute, GPT Live
+Transcribe US$0.017/minute. Successful transcription requests use submitted audio
+duration (or the recorded API's reported duration). Tidy/Fun and selected-text
+rewrites use reported input, cached-input and output tokens at saved model rates.
+Sources: [pricing](https://developers.openai.com/api/docs/pricing),
+[Transcribe](https://developers.openai.com/api/docs/models/gpt-transcribe),
+[Live Transcribe](https://developers.openai.com/api/docs/models/gpt-live-transcribe).
+
+These are USD estimates, not invoices: tax, currency conversion, credits and
+SDK/provider retries are excluded. Failed, cancelled, crashed, unsupported-model
+and missing-token requests remain explicitly unpriced, never silently free.
+Reports include a hypothetical live-to-recorded-model comparison. Price snapshots
+are saved per request; updating rates does not rewrite previous estimates.
+Ledger errors are logged and do not prevent dictation. No transcript, prompt,
+audio or API key is stored in the usage ledger.

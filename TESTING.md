@@ -548,3 +548,10 @@ Live diagnostic supervisor-only failure recovered in 34.049 seconds, retaining a
 PID 65208. Task event recorded child exit -1; new supervisor logged previous unclosed
 run with PID/run ID/last heartbeat and reason unknown. Startup wrapper and safe report
 are active; old app privacy/health activation awaits explicit user restart approval.
+# Usage Accounting
+
+`python -m pytest tests/test_usage_tracking.py tests/test_live_transcription.py
+tests/test_selected_text_tidy.py -vv` tests duration/cached-token estimates,
+concurrent SQLite writers, pending/unknown accounting, idempotent finalization,
+metadata-only storage, ledger failures and existing transcription/rewrite paths.
+Tests isolate the usage database and make no paid API calls.
