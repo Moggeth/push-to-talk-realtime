@@ -555,3 +555,7 @@ tests/test_selected_text_tidy.py -vv` tests duration/cached-token estimates,
 concurrent SQLite writers, pending/unknown accounting, idempotent finalization,
 metadata-only storage, ledger failures and existing transcription/rewrite paths.
 Tests isolate the usage database and make no paid API calls.
+
+SQLite WAL initialization is serialized: concurrent first-ever opens can otherwise
+fail immediately at `PRAGMA journal_mode=WAL` despite a busy timeout. Keep the
+concurrent writer test starting from a nonexistent database, not a prewarmed one.

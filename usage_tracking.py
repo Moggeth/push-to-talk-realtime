@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import sqlite3
+import threading
 from contextlib import closing
 from datetime import datetime
 from decimal import Decimal
@@ -23,6 +24,8 @@ TOKEN_RATES = {
     "gpt-5.6-terra": (2.0, 0.20, 12.0),
     "gpt-5.6-sol": (4.0, 0.40, 20.0),
 }
+_schema_lock = threading.Lock()
+_initialized_paths: set[Path] = set()
 
 
 def usage_path() -> Path:
@@ -92,7 +95,12 @@ class UsageStore:
         db = sqlite3.connect(self.path, timeout=1.0)
         try:
             db.row_factory = sqlite3.Row
-            db.execute("PRAGMA journal_mode=WAL")
+            # WAL's initial mode change can fail immediately during concurrent opens.
+            # Serialize initialization, not requests; subsequent connections reuse WAL.
+            with _schema_lock:
+                if self.path not in _initialized_paths:
+                    db.execute("PRAGMA journal_mode=WAL")
+                    _initialized_paths.add(self.path)
             db.execute("""CREATE TABLE IF NOT EXISTS usage_events (
                 id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, month TEXT NOT NULL,
                 model TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL,

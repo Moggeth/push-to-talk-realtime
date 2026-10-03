@@ -2099,6 +2099,7 @@ def test_menu_builders_include_expected_top_level_items(monkeypatch):
     assert [item.text for item in menu] == [
         "Mode: Raw",
         "Transcript history",
+        "Usage & cost",
         "Settings...",
         "Shortcuts & startup",
         "- - - -",
