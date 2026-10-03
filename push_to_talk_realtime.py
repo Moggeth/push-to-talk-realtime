@@ -187,17 +187,19 @@ OUTPUT_TURN_WAIT_TIMEOUT_S = max(
     float(os.getenv("OUTPUT_TURN_WAIT_TIMEOUT_S", "90")),
 )
 POST_PROCESS_MODEL_OPTIONS = (
+    "gpt-6.1-sol",
     "gpt-5.6-luna",
     "gpt-5.6-terra",
     "gpt-5.6-sol",
 )
 POST_PROCESS_MODEL_LABELS = {
+    "gpt-6.1-sol": "GPT-6.1 Sol",
     "gpt-5.6-luna": "GPT-5.6 Luna (fast)",
     "gpt-5.6-terra": "GPT-5.6 Terra (balanced)",
     "gpt-5.6-sol": "GPT-5.6 Sol (highest quality)",
 }
-DEFAULT_POST_PROCESS_MODEL = os.getenv("OPENAI_POST_PROCESS_MODEL", "gpt-5.6-luna").strip()
-SELECTED_TEXT_TIDY_MODEL = os.getenv("SELECTED_TEXT_TIDY_MODEL", "gpt-5.6-terra").strip()
+DEFAULT_POST_PROCESS_MODEL = os.getenv("OPENAI_POST_PROCESS_MODEL", "gpt-6.1-sol").strip()
+SELECTED_TEXT_TIDY_MODEL = os.getenv("SELECTED_TEXT_TIDY_MODEL", "gpt-6.1-sol").strip()
 SELECTED_TEXT_TIDY_INSTRUCTION = (
     "Rewrite as clean, professional, natural notes. Remove filler, repetition, and false starts "
     "while preserving every fact, name, request, decision, action, intention, and uncertainty. "
@@ -360,7 +362,7 @@ def normalize_post_process_model(model: str) -> str:
     normalized = (model or "").strip().lower()
     if normalized in POST_PROCESS_MODEL_OPTIONS:
         return normalized
-    return "gpt-5.6-luna"
+    return "gpt-6.1-sol"
 
 
 def post_process_model_label(model: str) -> str:
@@ -855,6 +857,22 @@ def startup_context() -> StartupContext:
     )
 
 
+def migrate_rewrite_models(settings: dict) -> dict:
+    if settings.get("rewrite_model_revision") == 1:
+        return settings
+    migrated = dict(settings, rewrite_model_revision=1)
+    migrated["post_process_model"] = DEFAULT_POST_PROCESS_MODEL
+    profiles = settings.get("rewrite_profiles", {})
+    if isinstance(profiles, dict):
+        migrated["rewrite_profiles"] = {
+            mode: dict(profile, model=DEFAULT_POST_PROCESS_MODEL)
+            if isinstance(profile, dict)
+            else profile
+            for mode, profile in profiles.items()
+        }
+    return migrated
+
+
 def load_settings_from_disk() -> dict[str, Any]:
     try:
         source_path = SETTINGS_PATH
@@ -870,9 +888,13 @@ def load_settings_from_disk() -> dict[str, Any]:
         raw = source_path.read_text(encoding="utf-8")
         parsed = json.loads(raw)
         if isinstance(parsed, dict):
-            if migrating_legacy_settings:
-                write_settings_payload(parsed)
-                log(f"[Settings] Migrated settings to {SETTINGS_PATH}.")
+            migrated = migrate_rewrite_models(parsed)
+            if migrating_legacy_settings or migrated != parsed:
+                try:
+                    write_settings_payload(migrated)
+                except Exception as exc:
+                    log("[Settings] Migration not persisted:", type(exc).__name__)
+                parsed = migrated
             return parsed
     except Exception as exc:  # pylint: disable=broad-except
         log("[Settings] Unable to load settings:", exc)
@@ -903,6 +925,7 @@ def save_settings_to_disk() -> bool:
 def _save_settings_to_disk() -> bool:
     with state.lock:
         payload = {
+            "rewrite_model_revision": 1,
             "transcription_engine": state.transcription_engine,
             "transcription_model": state.recorded_transcription_model,
             "dictation_hotkey_kind": state.dictation_hotkey_kind,
@@ -1133,6 +1156,9 @@ def post_process_instructions(profile: str) -> str:
 
 
 def metered_rewrite_request(**request):
+    if request.get("model") == "gpt-6.1-sol":
+        request["reasoning"] = {"effort": "low"}
+        request["max_output_tokens"] = max(8192, request.get("max_output_tokens", 0))
     with UsageMeter(request["model"], "rewrite") as meter:
         response = openai_client_with_timeout(POST_PROCESS_TIMEOUT_S).responses.create(**request)
         meter.usage = getattr(response, "usage", None)
@@ -1199,7 +1225,7 @@ def notify_selected_text_tidy(message: str) -> None:
 
 def transform_selected_text_tidy(text: str) -> str:
     response = metered_rewrite_request(
-        model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-terra",
+        model=SELECTED_TEXT_TIDY_MODEL or "gpt-6.1-sol",
         instructions=selected_text_tidy_instructions(),
         input=text,
         reasoning={"effort": "none"},
@@ -1221,9 +1247,9 @@ def archive_selected_text_tidy_raw(text: str) -> int | None:
         mode="selected_text_tidy",
         audio_source="selected_text",
         transcription_engine="responses",
-        transcription_model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-terra",
+        transcription_model=SELECTED_TEXT_TIDY_MODEL or "gpt-6.1-sol",
         post_processing_enabled=True,
-        post_process_model=SELECTED_TEXT_TIDY_MODEL or "gpt-5.6-terra",
+        post_process_model=SELECTED_TEXT_TIDY_MODEL or "gpt-6.1-sol",
         instruction_profile="android_uncategorized_tidy",
         instructions=selected_text_tidy_instructions(),
         raw_text=text,

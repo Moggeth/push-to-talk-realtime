@@ -619,7 +619,7 @@ def test_apply_persisted_settings_loads_hotkeys_and_engine(monkeypatch, tmp_path
     assert app.state.dictation_hotkey_label == "F15"
     assert app.state.dictation_history_enabled is False
     assert app.state.post_processing_enabled is True
-    assert app.state.post_process_model == "gpt-5.6-terra"
+    assert app.state.post_process_model == "gpt-6.1-sol"
     assert app.state.post_process_instruction_profile == "concise"
 
 
@@ -653,8 +653,9 @@ def test_load_settings_migrates_legacy_checkout_file(monkeypatch, tmp_path: Path
     monkeypatch.setattr(app, "SETTINGS_PATH", settings_path)
     monkeypatch.setattr(app, "LEGACY_SETTINGS_PATH", legacy_path)
 
-    assert app.load_settings_from_disk() == expected
-    assert json.loads(settings_path.read_text(encoding="utf-8")) == expected
+    migrated = app.migrate_rewrite_models(expected)
+    assert app.load_settings_from_disk() == migrated
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == migrated
 
 
 def test_missing_settings_uses_live_default(monkeypatch, tmp_path: Path):
@@ -703,6 +704,7 @@ def test_save_settings_to_disk_includes_hotkeys(monkeypatch, tmp_path: Path):
 
     saved = json.loads(settings_path.read_text(encoding="utf-8"))
     assert saved == {
+        "rewrite_model_revision": 1,
         "transcription_engine": app.TRANSCRIPTION_ENGINE_RECORDED,
         "transcription_model": "gpt-transcribe",
         "dictation_hotkey_kind": app.HOTKEY_KIND_KEYBOARD,
@@ -757,7 +759,7 @@ def test_post_process_model_normalization_and_selector(monkeypatch):
     monkeypatch.setattr(app, "refresh_tray_menu", lambda: refresh_calls.append("refresh"))
 
     assert app.normalize_post_process_model("GPT-5.6-TERRA") == "gpt-5.6-terra"
-    assert app.normalize_post_process_model("unknown") == "gpt-5.6-luna"
+    assert app.normalize_post_process_model("unknown") == "gpt-6.1-sol"
 
     app.set_post_process_model("gpt-5.6-sol")
 
@@ -855,6 +857,7 @@ def test_post_processing_menus_list_models_instructions_and_custom_editor():
     instruction_menu = app.build_post_process_instruction_menu()
 
     assert [item.text for item in model_menu] == [
+        "GPT-6.1 Sol",
         "GPT-5.6 Luna (fast)",
         "GPT-5.6 Terra (balanced)",
         "GPT-5.6 Sol (highest quality)",

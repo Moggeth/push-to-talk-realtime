@@ -206,10 +206,10 @@ def test_selected_tidy_request_uses_terra_with_android_tidy_prompt(monkeypatch):
 
     monkeypatch.setattr(app, "openai_client_with_timeout", lambda _: Client())
     assert app.transform_selected_text_tidy("input") == "rewritten"
-    assert request["model"] == "gpt-5.6-terra"
+    assert request["model"] == "gpt-6.1-sol"
     assert request["instructions"] == app.selected_text_tidy_instructions()
-    assert request["reasoning"] == {"effort": "none"}
-    assert request["max_output_tokens"] == 4096
+    assert request["reasoning"] == {"effort": "low"}
+    assert request["max_output_tokens"] == 8192
     assert request["store"] is False
 
 

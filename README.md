@@ -475,6 +475,13 @@ The server binds each preview to the selected IDs and complete current rows. If 
 This flow uses server-rendered forms and works without JavaScript. It requires the local transcript-browser server; a downloaded HTML page is not a separate archive application. Verification instructions and the safe synthetic-only launcher are in `TESTING.md`; implementation timings and review findings are in `docs/2026-09-23-transcript-export.md`.
 # Usage and Cost
 
+Tidy, Fun and selected-text Tidy now default to GPT-6.1 Sol. Existing rewrite
+profiles migrate once, preserving instructions, transcription model and shortcuts.
+Later model choices are retained; explicit model environment overrides remain
+available. Sol uses low reasoning (none is unsupported). Published Standard
+pricing per million tokens is $2 input, $0.10 cached input, $10 output:
+[official model details](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
+
 The monthly Codex follow-up is scheduled for the first day at 09:00
 Australia/Sydney, reporting the previous calendar month. It needs this computer
 and the Codex app available to read the local ledger; it is not an OpenAI billing

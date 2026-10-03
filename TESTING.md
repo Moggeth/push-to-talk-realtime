@@ -550,6 +550,11 @@ run with PID/run ID/last heartbeat and reason unknown. Startup wrapper and safe 
 are active; old app privacy/health activation awaits explicit user restart approval.
 # Usage Accounting
 
+`tests/test_rewrite_model_upgrade.py` checks the one-time Sol upgrade preserves
+custom instructions and transcription settings, respects later choices, and uses
+the verified token rates. Selected-text request tests check low reasoning and
+the 8192-token output budget. No paid model request is made by these tests.
+
 `python -m pytest tests/test_usage_tracking.py tests/test_live_transcription.py
 tests/test_selected_text_tidy.py -vv` tests duration/cached-token estimates,
 concurrent SQLite writers, pending/unknown accounting, idempotent finalization,

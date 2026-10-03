@@ -20,6 +20,7 @@ PRICE_DATE = "2026-10-03"
 PRICE_SOURCE = "https://developers.openai.com/api/docs/pricing"
 MINUTE_RATES = {"gpt-transcribe": 0.0045, "gpt-live-transcribe": 0.017}
 TOKEN_RATES = {
+    "gpt-6.1-sol": (2.0, 0.10, 10.0),
     "gpt-5.6-luna": (0.20, 0.02, 1.20),
     "gpt-5.6-terra": (2.0, 0.20, 12.0),
     "gpt-5.6-sol": (4.0, 0.40, 20.0),
