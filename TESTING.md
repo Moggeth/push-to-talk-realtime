@@ -1,5 +1,22 @@
 # Testing (Plain Language)
 
+## Learned Transcription Progress (2026-10-03)
+
+`tests/test_transcription_progress.py` covers model/engine isolation, cold starts,
+length-sensitive estimates, outliers, unstable history, recency, expiry, invalid
+durations, bounded memory, SQLite roundtrip and corrupt-file isolation. Rendering
+tests cover Raw/Tidy/Fun, monotonic fill, traveler continuity, and the independent
+outer orange ring during recording. Synthetic orchestration tests check recorded
+and live timing boundaries: rewrite time and empty results never train the model.
+Regression protection includes selecting recent rather than fastest samples when
+many recordings have identical lengths.
+
+Run `pytest -vv tests/test_transcription_progress.py tests/test_cursor_indicator.py`.
+Full suite: 397 passed in 28.22 seconds; touched Python files pass Ruff lint/format.
+No desktop automation, live recording or paid API request is needed. Native visual
+acceptance and real-world predictive accuracy remain to be observed during normal
+use; synthetic tests do not establish either. The running app was not restarted.
+
 ## Content-free lifecycle diagnostics (2026-10-02)
 
 `test_runtime_diagnostics.py` verifies strict payload omission (including provider

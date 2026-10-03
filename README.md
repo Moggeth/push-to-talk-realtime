@@ -11,6 +11,7 @@ although external launchers can still start it by pointing at this checkout.
 
 Features
 --------
+- Learned transcription progress: the orange cursor ring gradually fills using recent timings for the selected model and similar audio lengths, including the outer ring while another recording is active. It starts as a normal spinner until at least eight relevant successful samples exist. No countdown is shown; an overdue request keeps moving and never falsely completes. Live finalization is learned separately from recorded transcription; GPT cleanup remains indeterminate.
 - Windows process recovery: the normal launcher keeps a small supervisor outside the tray app. Unexpected process exits restart automatically, normally after 1-2 seconds; repeated startup failures back off to 60 seconds. Explicit Quit stops both, and Restart returns through the supervised launcher. Existing hotkeys, settings and history are unchanged.
 - Cursor overlay recovery: externally hidden windows are restored on the next active frame. An unexpected overlay shutdown retries after five seconds; startup and failures are recorded in the app log.
 - Push-to-talk dictation: record and paste on release.

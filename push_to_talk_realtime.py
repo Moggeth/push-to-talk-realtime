@@ -29,6 +29,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from usage_tracking import UsageMeter, UsageStore, usage_path
+from transcription_progress import TimingEstimator
 from rewrite_review import RewriteReviewManager
 from output_transaction import output_transaction
 from pathlib import Path
@@ -301,6 +302,7 @@ WORKLOG_TAP_MAX_S = 0.25
 SCRIPT_DIR = Path(__file__).resolve().parent
 STARTER_SCRIPT_PATH = SCRIPT_DIR / "start_push_to_talk.py"
 RUNTIME_PATHS = resolve_runtime_paths()
+TRANSCRIPTION_TIMINGS = TimingEstimator()
 DEFAULT_SETTINGS_PATH = default_settings_path()
 LEGACY_SETTINGS_PATH = SCRIPT_DIR / "settings.json"
 SETTINGS_PATH = Path(os.getenv("PUSH_TO_TALK_SETTINGS_PATH") or DEFAULT_SETTINGS_PATH)
@@ -2835,16 +2837,24 @@ def finalize_session_transcription(
     session_id: int | None = None,
     rewrite_mode: str = "raw",
 ) -> TranscriptionOutcome:
+    audio_duration_s = sum(len(chunk) for chunk in chunks) / SAMPLE_RATE if chunks else 0.0
+    timing_key = (
+        f"{transcription_engine}:{LIVE_TRANSCRIBE_MODEL}"
+        if transcription_engine == TRANSCRIPTION_ENGINE_LIVE
+        else f"{transcription_engine}:{recorded_model}"
+    )
+    expected_s = TRANSCRIPTION_TIMINGS.predict(timing_key, audio_duration_s) or 0.0
     if session_id is not None:
         with state.lock:
-            state.indicator_jobs[session_id] = JobView(session_id, mode=rewrite_mode)
+            state.indicator_jobs[session_id] = JobView(
+                session_id, mode=rewrite_mode, started_at=time.monotonic(), expected_s=expected_s
+            )
     use_realtime = transcription_engine == TRANSCRIPTION_ENGINE_LIVE
     mark_transcription_started(live_finalizing=use_realtime)
     log(
         "\n[Transcribing] "
         f"{transcription_engine_label(transcription_engine, recorded_model)} request sent..."
     )
-    audio_duration_s = sum(len(chunk) for chunk in chunks) / SAMPLE_RATE if chunks else 0.0
     started_at = time.perf_counter()
     transcript_text = ""
     engine_used = transcription_engine
@@ -2880,6 +2890,10 @@ def finalize_session_transcription(
         else:
             transcript_text = transcribe_audio(chunks, transcription_engine, recorded_model)
 
+        if transcript_text.strip():
+            TRANSCRIPTION_TIMINGS.observe(
+                timing_key, audio_duration_s, time.perf_counter() - started_at
+            )
         processed_text = transcript_text
         archive_entry_id: int | None = None
         post_process_status = "not_requested"
@@ -4743,6 +4757,7 @@ def main() -> int:
         for source, exc in migration_failures:
             log(f"[Storage] Unable to migrate {source}: {exc}")
         refresh_device_list()
+        TRANSCRIPTION_TIMINGS.start(RUNTIME_PATHS.log.parent / "transcription_timings.db")
         tray_icon = pystray.Icon(
             "push_to_talk_realtime",
             create_tray_icon_image(),
@@ -4768,6 +4783,7 @@ def main() -> int:
         APP_DIAGNOSTICS.emit("exception", exception=exc, reason="unhandled")
         raise
     finally:
+        TRANSCRIPTION_TIMINGS.close()
         stop_cursor_activity_indicator()
         stop_warm_microphone_watchdog()
         warm_microphone_capture.stop()

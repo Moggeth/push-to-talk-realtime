@@ -12,6 +12,8 @@ from typing import ClassVar
 
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
+from transcription_progress import estimated_progress
+
 INDICATOR_SIZE = 96
 INDICATOR_TARGET_FPS = 120
 INDICATOR_IDLE_POLL_FPS = 30
@@ -35,6 +37,7 @@ class IndicatorFrame:
     marker_scale: float = 1.0
     marker_spin: float = 0.0
     extent_gain: float = 1.0
+    estimated: bool = False
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,13 @@ class JobView:
     job_id: int
     phase: str = "transcribing"
     mode: str = "raw"
+    started_at: float = 0.0
+    expected_s: float = 0.0
+
+    def progress(self, now: float) -> float | None:
+        if self.phase != "transcribing":
+            return None
+        return estimated_progress(self.started_at, self.expected_s, now)
 
 
 @dataclass(frozen=True)
@@ -143,6 +153,7 @@ class BackgroundOrbit:
         frames = []
         if background:
             job = background[0]
+            estimated = job.progress(now)
             progress = min(1.0, max(0.0, (now - self.started_at) / 0.22))
             eased = 4 * progress**3 if progress < 0.5 else 1 - (-2 * progress + 2) ** 3 / 2
             target = (220, 90, 235, 255) if job.phase == "rewriting" else (255, 165, 0, 255)
@@ -151,7 +162,9 @@ class BackgroundOrbit:
                 OrbitFrame(
                     self.phase,
                     self.radius_from + (36 - self.radius_from) * eased,
-                    64 + 6 * math.sin(math.tau * 0.4 * now),
+                    64 + 286 * estimated
+                    if estimated is not None
+                    else 64 + 6 * math.sin(math.tau * 0.4 * now),
                     color=self.color,
                     mode=job.mode,
                     split=job.phase == "rewriting",
@@ -265,6 +278,19 @@ class IndicatorAnimator:
     def update(self, snapshot: CursorIndicatorSnapshot, now: float) -> IndicatorVisual:
         orbits = self.background.update(snapshot, now, self.phase)
         visual = self._update_primary(snapshot, now)
+        if snapshot.activity == "transcribing" and snapshot.jobs:
+            progress = snapshot.jobs[-1].progress(now)
+            if progress is not None:
+                frame = visual.frame
+                extent = 64 + 286 * progress
+                # Grow behind the traveler, preserving its angular position.
+                frame = replace(
+                    frame,
+                    arc_start=frame.arc_start + frame.arc_extent - extent,
+                    arc_extent=extent,
+                    estimated=True,
+                )
+                visual = replace(visual, frame=frame)
         return replace(visual, visible=visual.visible or bool(orbits), orbits=orbits)
 
     def _update_primary(self, snapshot: CursorIndicatorSnapshot, now: float) -> IndicatorVisual:
@@ -576,7 +602,7 @@ def render_indicator_image(
     )
     extent = (
         frame.arc_extent
-        if mode == "raw"
+        if mode == "raw" or frame.estimated
         else (42.0 if mode == "tidy" else 66.0) * frame.extent_gain
     )
     end_angle = frame.arc_start + frame.arc_extent
