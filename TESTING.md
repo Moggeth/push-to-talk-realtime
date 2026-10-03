@@ -617,3 +617,15 @@ Native popup creation and preservation of the synthetic editor's focus were
 observed; the full physical one-click workflow was not completed. The user stopped
 Computer Use and requested background-only verification. Do not describe unit
 tests as acceptance of every editor or of the Codex composer.
+
+
+## Windowless readiness task
+`pytest -vv tests/test_windowless_readiness.py` verifies no-console startup flags,
+argument/exit-code preservation and redacted durable bootstrap errors. Run Ruff
+on `readiness_task.pyw` and that test file. Verify the actual scheduled action with
+native visible-window observation spanning a manual invocation and a recurring
+run; do not infer visibility from conhost process existence alone. Existing app
+and supervisor PIDs must remain unchanged. Diagnostic output is under ignored
+`logs/windowless-readiness-20261003.json`.
+
+Live acceptance: 80.017 seconds spanning a manual task invocation and the next one-minute recurrence found zero visible ConsoleWindowClass or Windows Terminal windows. Both task runs completed with exit 0. Existing supervisor PID1476 and application PID73576 retained their original start times. Two focused tests passed in 0.05s; Ruff passed.

@@ -554,3 +554,22 @@ rewrites. Helper health events are in `diagnostics/app.events.jsonl` under
 
 Load the update with tray Restart when convenient. The running app is deliberately
 not restarted during implementation or verification.
+
+
+### Silent scheduled recovery (2026-10-03)
+
+Task Scheduler starts `pythonw.exe readiness_task.pyw --python <pythonw.exe>`.
+That windowless bootstrap runs the existing `readiness_task.ps1` with
+`CREATE_NO_WINDOW` and `STARTUPINFO/SW_HIDE`, preserving lifecycle logs and exit
+codes. Do not schedule PowerShell directly: `-WindowStyle Hidden` is processed
+after Windows Terminal may already have appeared. The previous native window
+trace captured exactly that visible Terminal startup while the package manager's
+five-second scan children remained hidden.
+
+Reinstall with `install_windows_readiness.ps1`; its task action uses the windowless
+bootstrap. To update an existing installation without resetting triggers, change
+only its action with `Set-ScheduledTask`, after exporting its XML. Existing app
+and supervisor processes need not restart. Inspect `windows_readiness_status.ps1`
+and `%LOCALAPPDATA%/PushToTalkRealtime/diagnostics/task.events.jsonl`; bootstrap
+launch errors are metadata-only in `windowless-task-error.jsonl`. Disabling or
+restoring the scheduled task follows the existing recovery instructions above.
