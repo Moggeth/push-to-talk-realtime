@@ -26,7 +26,7 @@ import webbrowser
 from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from usage_tracking import UsageMeter, UsageStore, usage_path
 from pathlib import Path
 from typing import Any, Protocol
@@ -38,7 +38,7 @@ from dotenv import load_dotenv
 from pynput import keyboard as pynput_keyboard
 
 import desktop_bootstrap  # noqa: F401
-from cursor_indicator import CursorActivityIndicator, CursorIndicatorSnapshot
+from cursor_indicator import CursorActivityIndicator, CursorIndicatorSnapshot, JobView, TerminalView
 from recording_modes import MODES, PasteCycleFilter
 from selected_text_tidy import (
     SelectedTextTidyDependencies,
@@ -490,6 +490,8 @@ class SessionState:
     last_audio_rms: float = 0.0
     indicator_result: str = ""
     indicator_result_at: float = 0.0
+    indicator_jobs: dict[int, JobView] = field(default_factory=dict)
+    indicator_terminals: deque = field(default_factory=lambda: deque(maxlen=16))
     paste_suffix_mode: str = DEFAULT_SUFFIX_MODE
     punctuation_terminal: bool = True
     punctuation_capitalize: bool = False
@@ -644,6 +646,24 @@ def log(*a):
 
 
 def cursor_indicator_snapshot() -> CursorIndicatorSnapshot:
+    with state.lock:
+        jobs = tuple(state.indicator_jobs[key] for key in sorted(state.indicator_jobs))
+        terminals = tuple(state.indicator_terminals)
+    snapshot = _primary_cursor_snapshot()
+    if jobs and snapshot.activity in ("transcribing", "rewriting"):
+        job = jobs[-1]
+        rewriting = job.phase == "rewriting"
+        snapshot = replace(
+            snapshot,
+            mode=job.mode,
+            activity=job.phase,
+            color=TRAY_COLOR_POST_PROCESSING if rewriting else TRAY_COLOR_TRANSCRIBING,
+            motion_speed=1.5 if rewriting else 2.6,
+        )
+    return replace(snapshot, jobs=jobs, terminals=terminals)
+
+
+def _primary_cursor_snapshot() -> CursorIndicatorSnapshot:
     with state.lock:
         is_listening = state.is_listening
         is_transcribing = state.is_transcribing
@@ -2737,7 +2757,12 @@ def finalize_session_transcription(
     realtime_cancel_event: threading.Event | None,
     realtime_result: dict[str, str],
     rewrite_instructions: str | None = None,
+    session_id: int | None = None,
+    rewrite_mode: str = "raw",
 ) -> TranscriptionOutcome:
+    if session_id is not None:
+        with state.lock:
+            state.indicator_jobs[session_id] = JobView(session_id, mode=rewrite_mode)
     use_realtime = transcription_engine == TRANSCRIPTION_ENGINE_LIVE
     mark_transcription_started(live_finalizing=use_realtime)
     log(
@@ -2813,6 +2838,11 @@ def finalize_session_transcription(
                 raw_text=transcript_text,
             )
         if post_processing_enabled and transcript_text.strip():
+            if session_id is not None:
+                with state.lock:
+                    state.indicator_jobs[session_id] = JobView(
+                        session_id, "rewriting", rewrite_mode
+                    )
             post_process_started_at = time.perf_counter()
             mark_post_processing_started()
             try:
@@ -2875,6 +2905,8 @@ def deliver_session_output(
     if waiting_for_earlier_output:
         log(f"[Session {session_id}] Waiting for earlier transcript output.")
     if not wait_for_output_turn(session_id):
+        with state.lock:
+            state.indicator_jobs.pop(session_id, None)
         log(f"[Session {session_id}] Result arrived after its output slot; discarded.")
         mark_transcription_finished(
             outcome.final_text,
@@ -2938,6 +2970,9 @@ def deliver_session_output(
         raise
     finally:
         with state.lock:
+            state.indicator_jobs.pop(session_id, None)
+            if result and not shutdown_event.is_set():
+                state.indicator_terminals.append(TerminalView(session_id, result, time.monotonic()))
             if not state.is_listening and not shutdown_event.is_set():
                 state.indicator_result = result
                 state.indicator_result_at = time.monotonic()
@@ -3141,6 +3176,8 @@ def start_listening(
             post_process_instruction_profile = "custom"
     log(f"[Rewrite] Session {session_id}: {capture_timestamps.rewrite_mode}")
     outcome = finalize_session_transcription(
+        session_id=session_id,
+        rewrite_mode=capture_timestamps.rewrite_mode,
         chunks=chunks,
         mode=mode,
         audio_source=audio_source,

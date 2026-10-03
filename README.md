@@ -475,6 +475,11 @@ The server binds each preview to the selected IDs and complete current rows. If 
 This flow uses server-rendered forms and works without JavaScript. It requires the local transcript-browser server; a downloaded HTML page is not a separate archive application. Verification instructions and the safe synthetic-only launcher are in `TESTING.md`; implementation timings and review findings are in `docs/2026-09-23-transcript-export.md`.
 # Usage and Cost
 
+The monthly Codex follow-up is scheduled for the first day at 09:00
+Australia/Sydney, reporting the previous calendar month. It needs this computer
+and the Codex app available to read the local ledger; it is not an OpenAI billing
+portal integration. Manage it as **Monthly push-to-talk spend** in Codex.
+
 The tray's **Usage & cost** opens a content-free monthly report. Tracking starts
 with this version; previous usage is not reconstructed. The independent SQLite
 ledger lives beside the runtime log as `usage.db` (override with
@@ -496,3 +501,17 @@ Reports include a hypothetical live-to-recorded-model comparison. Price snapshot
 are saved per request; updating rates does not rewrite previous estimates.
 Ledger errors are logged and do not prevent dictation. No transcript, prompt,
 audio or API key is stored in the usage ledger.
+
+## Overlapping Capture Feedback
+
+Recording retains the red inner cursor ring (blue for system audio). Previous
+jobs occupy a separate outer orange orbit; rewriting turns that orbit magenta.
+Small trailing pips indicate additional queued jobs. Each successful delivered
+job closes into a green ring, expands with eight short ticks, then fades over
+560 ms while recording continues unchanged. Failed jobs use an amber fracture,
+not the green completion. Silent/discarded results fade quietly.
+
+The native cursor surface is 96 x 96, supersampled at 4x and targeting 120 Hz.
+The existing tray colors, capture shortcuts, output ordering and clipboard
+behavior are unchanged. Use tray **Restart** after updating to load the changes;
+finish any active recording/transcription first.

@@ -559,3 +559,18 @@ Tests isolate the usage database and make no paid API calls.
 SQLite WAL initialization is serialized: concurrent first-ever opens can otherwise
 fail immediately at `PRAGMA journal_mode=WAL` despite a busy timeout. Keep the
 concurrent writer test starting from a nonexistent database, not a prewarmed one.
+
+## Concurrent Cursor Feedback
+
+`tests/test_cursor_overlap.py` covers unchanged primary recording geometry during
+completion, source colors, per-job modes, queued jobs, rewrite transitions,
+failures, quiet cancellation, repeated terminal events and unclipped renders at
+30/60/120/144 Hz. `tests/test_cursor_results.py` checks explicit delivery outcomes.
+`python tests/manual_overlap_preview.py` generates synthetic GIF/contact-sheet
+previews under ignored `output/`, without input hooks or API calls. Latest render
+benchmark: 480 frames, mean 1.275 ms, p95 1.503 ms, versus 8.33 ms at 120 Hz.
+
+Opus 5.5 supplied the independent outer-orbit motion specification. Integration
+preserves the existing primary animator instead of replacing it. Native desktop
+acceptance still needs a real record/release/re-record cycle after restarting;
+offline frames cannot verify monitor refresh or the physical mouse gesture.

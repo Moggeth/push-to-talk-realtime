@@ -53,6 +53,7 @@ def test_live_session_streams_audio_commits_once_and_returns_completed_text():
     stop_event = threading.Event()
     stop_event.set()
     deltas: list[str] = []
+    meter = SimpleNamespace(seconds=0.0, completed=False)
     ws = FakeWebSocket(
         [
             {"type": "session.created", "session": {"type": "transcription"}},
@@ -76,9 +77,12 @@ def test_live_session_streams_audio_commits_once_and_returns_completed_text():
         stop_event,
         app.live_transcription_config(),
         deltas.append,
+        meter=meter,
     )
 
     assert text == "Hello world."
+    assert meter.seconds == 0.01
+    assert meter.completed
     assert deltas == ["Hello "]
     assert [event["type"] for event in ws.sent] == [
         "session.update",

@@ -6,13 +6,13 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import ClassVar
 
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
-INDICATOR_SIZE = 88
+INDICATOR_SIZE = 96
 INDICATOR_TARGET_FPS = 120
 INDICATOR_IDLE_POLL_FPS = 30
 INDICATOR_SUPERSAMPLE_SCALE = 4
@@ -38,6 +38,36 @@ class IndicatorFrame:
 
 
 @dataclass(frozen=True)
+class JobView:
+    job_id: int
+    phase: str = "transcribing"
+    mode: str = "raw"
+
+
+@dataclass(frozen=True)
+class TerminalView:
+    job_id: int
+    outcome: str
+    at: float
+
+
+@dataclass(frozen=True)
+class OrbitFrame:
+    phase: float
+    radius: float = 36.0
+    extent: float = 64.0
+    width: float = 1.8
+    opacity: float = 0.82
+    color: tuple[int, int, int, int] = (255, 165, 0, 255)
+    mode: str = "raw"
+    split: bool = False
+    ticks: float = 0.0
+    failed: bool = False
+    drop: float = 0.0
+    queued: int = 0
+
+
+@dataclass(frozen=True)
 class CursorIndicatorSnapshot:
     visible: bool
     color: tuple[int, int, int, int]
@@ -46,6 +76,8 @@ class CursorIndicatorSnapshot:
     mode: str = "raw"
     activity: str = "recording"
     audio_level: float = 0.0
+    jobs: tuple[JobView, ...] = ()
+    terminals: tuple[TerminalView, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -59,6 +91,113 @@ class IndicatorVisual:
     previous_mode: str = "raw"
     mode_mix: float = 1.0
     activity: str = "recording"
+    orbits: tuple[OrbitFrame, ...] = ()
+
+
+class BackgroundOrbit:
+    """Independent outer orbit: terminal events, never color changes, end jobs."""
+
+    def __init__(self):
+        self.phase = -90.0
+        self.last_at = None
+        self.started_at = 0.0
+        self.radius_from = 36.0
+        self.known: dict[int, JobView] = {}
+        self.exits: list[tuple[TerminalView, float, JobView]] = []
+        self.was_active = False
+        self.color = (255, 165, 0, 255)
+        self.last_lead = None
+        self.quiet_exit = None
+
+    def update(self, snapshot, now, primary_phase):
+        dt = 0.0 if self.last_at is None else min(0.1, max(0.0, now - self.last_at))
+        self.last_at = now
+        self.phase = (self.phase + 120 * dt) % 360
+        jobs = list(snapshot.jobs)
+        # The primary displays the newest pending job when the microphone is idle.
+        background = jobs if snapshot.activity == "recording" and snapshot.visible else jobs[:-1]
+        terminal_ids = {terminal.job_id for terminal in snapshot.terminals}
+        if (
+            self.was_active
+            and not background
+            and self.last_lead is not None
+            and not terminal_ids.intersection(self.known)
+        ):
+            self.quiet_exit = (now, self.last_lead)
+        for terminal in snapshot.terminals:
+            job = self.known.pop(terminal.job_id, None)
+            if (
+                job is not None
+                and terminal.outcome in ("success", "error")
+                and now - terminal.at < 0.56
+            ):
+                self.exits.append((terminal, self.phase, job))
+        self.exits = [entry for entry in self.exits[-4:] if now - entry[0].at < 0.56]
+        if background and not self.was_active:
+            self.started_at = now
+            self.phase = primary_phase
+            self.radius_from = 27.0
+            self.quiet_exit = None
+        self.was_active = bool(background)
+        self.known = {job.job_id: job for job in background}
+        frames = []
+        if background:
+            job = background[0]
+            progress = min(1.0, max(0.0, (now - self.started_at) / 0.22))
+            eased = 4 * progress**3 if progress < 0.5 else 1 - (-2 * progress + 2) ** 3 / 2
+            target = (220, 90, 235, 255) if job.phase == "rewriting" else (255, 165, 0, 255)
+            self.color = blend_color(self.color, target, 1 - math.exp(-dt / 0.04))
+            frames.append(
+                OrbitFrame(
+                    self.phase,
+                    self.radius_from + (36 - self.radius_from) * eased,
+                    64 + 6 * math.sin(math.tau * 0.4 * now),
+                    color=self.color,
+                    mode=job.mode,
+                    split=job.phase == "rewriting",
+                    queued=max(0, len(background) - 1),
+                )
+            )
+        self.last_lead = frames[0] if frames else None
+        if self.quiet_exit is not None:
+            started, last = self.quiet_exit
+            fade = min(1.0, max(0.0, (now - started) / 0.16))
+            if fade < 1:
+                frames.append(replace(last, opacity=last.opacity * (1 - fade**2)))
+            else:
+                self.quiet_exit = None
+        for terminal, phase, _job in self.exits:
+            age = max(0.0, now - terminal.at)
+            if terminal.outcome == "success":
+                close = 1 - (1 - min(1.0, age / 0.18)) ** 3
+                expand = 1 - (1 - min(1.0, max(0.0, (age - 0.18) / 0.24))) ** 4
+                opacity = 1 - min(1.0, max(0.0, (age - 0.30) / 0.26)) ** 2
+                color = blend_color((255, 165, 0, 255), (80, 220, 135, 255), age / 0.14)
+                ticks = max(0.0, 1 - (age - 0.20) / 0.28) if age >= 0.20 else 0.0
+                frames.append(
+                    OrbitFrame(
+                        phase + 120 * age,
+                        36 + 4.5 * expand,
+                        64 + 296 * close,
+                        1.8 + 1.2 * math.sin(math.pi * min(1, max(0, (age - 0.18) / 0.24))),
+                        opacity,
+                        color,
+                        ticks=ticks,
+                    )
+                )
+            else:
+                fracture = min(1.0, max(0.0, (age - 0.24) / 0.28))
+                shake = 7 * math.exp(-12 * age) * math.sin(math.tau * 9 * age)
+                frames.append(
+                    OrbitFrame(
+                        phase + shake,
+                        opacity=1 - fracture,
+                        color=(176, 128, 96, 255),
+                        failed=True,
+                        drop=4 * fracture**2,
+                    )
+                )
+        return tuple(frames)
 
 
 def indicator_frame(elapsed_s: float, motion_speed: float = 1.0) -> IndicatorFrame:
@@ -96,6 +235,7 @@ def blend_color(
 
 class IndicatorAnimator:
     def __init__(self) -> None:
+        self.background = BackgroundOrbit()
         self.last_at: float | None = None
         self.cycle_started_at = 0.0
         self.intro_started_at = 0.0
@@ -123,6 +263,11 @@ class IndicatorAnimator:
         self.last_onset_at = -math.inf
 
     def update(self, snapshot: CursorIndicatorSnapshot, now: float) -> IndicatorVisual:
+        orbits = self.background.update(snapshot, now, self.phase)
+        visual = self._update_primary(snapshot, now)
+        return replace(visual, visible=visual.visible or bool(orbits), orbits=orbits)
+
+    def _update_primary(self, snapshot: CursorIndicatorSnapshot, now: float) -> IndicatorVisual:
         previous_at = self.last_at
         self.last_at = now
         delta_s = 0.0 if previous_at is None else min(0.1, max(0.0, now - previous_at))
@@ -316,6 +461,69 @@ def indicator_label_font(scale: int):
     return ImageFont.load_default(size=11 * scale)
 
 
+def draw_background_orbit(draw, orbit: OrbitFrame, center: float, scale: int):
+    radius = orbit.radius * scale
+    cy = center + orbit.drop * scale
+    bounds = (center - radius, cy - radius, center + radius, cy + radius)
+    fill = (*orbit.color[:3], round(255 * orbit.opacity))
+    if not orbit.ticks and not orbit.failed:
+        draw.ellipse(
+            bounds,
+            outline=(*orbit.color[:3], round(70 * orbit.opacity)),
+            width=max(1, round(0.8 * scale)),
+        )
+    count = 3 if orbit.failed else 2 if orbit.split else 1
+    gap = 10 if orbit.failed else 8 if orbit.split else 0
+    part = (orbit.extent - gap * (count - 1)) / count
+    for index in range(count):
+        start = orbit.phase - orbit.extent + index * (part + gap)
+        draw.arc(
+            bounds,
+            start=start,
+            end=start + part,
+            fill=fill,
+            width=max(1, round(orbit.width * scale)),
+        )
+
+    def point(angle, r):
+        return center + math.cos(math.radians(angle)) * r * scale, cy + math.sin(
+            math.radians(angle)
+        ) * r * scale
+
+    if orbit.mode in ("tidy", "fun"):
+        x, y = point(orbit.phase, orbit.radius)
+        r = (2.2 if orbit.mode == "tidy" else 2.6) * scale
+        points = []
+        count = 4 if orbit.mode == "tidy" else 8
+        for index in range(count):
+            angle = math.radians(index * 360 / count - 90)
+            length = r if count == 4 or index % 2 == 0 else r * 0.3
+            points.append((x + math.cos(angle) * length, y + math.sin(angle) * length))
+        draw.polygon(points, fill=fill)
+    for index in range(min(3, orbit.queued)):
+        x, y = point(orbit.phase - orbit.extent - 16 - 14 * index, orbit.radius)
+        r = 1.3 * scale
+        draw.ellipse((x - r, y - r, x + r, y + r), fill=fill)
+    if orbit.queued > 3:
+        draw.arc(
+            bounds,
+            start=orbit.phase - orbit.extent - 60,
+            end=orbit.phase - orbit.extent - 56,
+            fill=fill,
+            width=max(1, round(1.2 * scale)),
+        )
+    if orbit.ticks:
+        for index in range(8):
+            # Retain the completion's orientation while the active traveler continues.
+            angle = index * 45
+            inner = 42 - 4 * orbit.ticks
+            draw.line(
+                (point(angle, inner), point(angle, inner + 3 * orbit.ticks)),
+                fill=fill,
+                width=max(1, round(1.2 * scale)),
+            )
+
+
 def render_indicator_image(
     frame: IndicatorFrame,
     color: tuple[int, int, int, int],
@@ -328,6 +536,7 @@ def render_indicator_image(
     previous_mode: str | None = None,
     mode_mix: float = 1.0,
     activity: str = "recording",
+    orbits: tuple[OrbitFrame, ...] = (),
 ) -> Image.Image:
     if previous_mode is not None and previous_mode != mode and mode_mix < 1.0:
         common = {
@@ -336,6 +545,7 @@ def render_indicator_image(
             "opacity": opacity,
             "label": label,
             "activity": activity,
+            "orbits": orbits,
         }
         return Image.blend(
             render_indicator_image(frame, color, mode=previous_mode, **common),
@@ -355,6 +565,8 @@ def render_indicator_image(
     )
     image = Image.new("RGBA", (render_size, render_size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
+    for orbit in orbits:
+        draw_background_orbit(draw, orbit, center, scale)
     alpha_scale = min(1.0, max(0.0, opacity))
     track_rgb = muted_color(color)[:3]
     draw.ellipse(
@@ -772,6 +984,7 @@ class CursorActivityIndicator:
                 previous_mode=visual.previous_mode,
                 mode_mix=visual.mode_mix,
                 activity=visual.activity,
+                orbits=visual.orbits,
             )
             pixels = premultiplied_bgra_bytes(image)
             ctypes.memmove(pixel_buffer, pixels, len(pixels))

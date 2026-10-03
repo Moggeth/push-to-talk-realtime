@@ -48,3 +48,7 @@ def test_delivery_feedback_tracks_outcome_without_interrupting_recording(
         realtime_delta_lock=threading.Lock(),
     )
     assert state.indicator_result == ("" if recording else expected)
+    assert [event.outcome for event in state.indicator_terminals] == (
+        [expected] if expected else []
+    )
+    assert not state.indicator_jobs
