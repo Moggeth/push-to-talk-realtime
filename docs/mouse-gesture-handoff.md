@@ -1,5 +1,31 @@
 # Mouse Gesture and Bullet Mode
 
+## Rich Paste Follow-up
+
+The initial plain hyphen/newline output did not trigger Codex list formatting in
+the user's screenshot. `rich_clipboard.py` now adds an escaped HTML list plus an
+empty paragraph, retaining CF_UNICODETEXT as fallback. Rich output bypasses direct
+plain-text control insertion. This avoids speculative typed-prefix/Shift+Enter
+sequences, which require knowing whether the editor already has an empty list item.
+The review popup uses Copy raw in bullet mode, not unsafe rich-range replacement.
+The original output notes below describe the plain-text fallback.
+
+The Win32 adapter adds a format without emptying the clipboard, verifies the
+existing text under the clipboard lock, bounds retry waits to 50 ms, and releases
+memory on failure but transfers ownership on success. The output path rechecks
+clipboard text before proceeding. Diagnostics record `bullet_output.rich_clipboard`
+without transcript content. The source specification is Microsoft's
+[HTML Clipboard Format](https://learn.microsoft.com/en-us/windows/win32/dataxchg/html-clipboard-format)
+and [SetClipboardData](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setclipboarddata).
+
+Follow-up timings: inspection/design/source verification 152.674 s; implementation
+and initial tests 208.387 s; full-suite follow-through and additional safety checks
+76.936 s. Nested checks: 37 focused tests in 0.68 s; 442 full tests in 28.92 s;
+60 final focused tests in 3.29 s. No native clipboard write, live UI control or
+restart was used for verification. A rejected documentation patch included unrelated
+context; use file-specific verified headings for follow-up documentation edits.
+The user's Codex composer remains an acceptance-test gap, not a confirmed fix.
+
 ## Behavior and Boundaries
 
 - Recognition is enabled by default but only samples pointer position while the

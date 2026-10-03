@@ -1,5 +1,21 @@
 # Testing (Plain Language)
 
+## Rich Bullet Clipboard (2026-10-03)
+
+`tests/test_rich_clipboard.py` validates semantic list markup, escaped transcript
+content, UTF-8 byte offsets for accents/emoji/CJK, bounded clipboard retries,
+unchanged plain-text fallback, changed-clipboard refusal, native memory transfer
+and failure cleanup, rich-paste routing and changed-foreground refusal. All native
+clipboard dependencies are fakes; no user's clipboard or desktop is touched.
+The full suite passed 442 tests in 28.92 s. A subsequent changed-clipboard guard
+passed the 60-test clipboard/gesture/diagnostics subset in 3.29 s. Ruff passes.
+
+Actual Codex paste acceptance, consecutive-item layout and native Win32 clipboard
+behavior are not established by these headless tests. After normal tray Restart,
+try two bullet dictations in an empty draft and confirm actual list markers rather
+than hyphens. If the editor strips HTML, do not automatically fall back to synthetic
+Enter or blind list-toggle shortcuts; inspect its paste behavior first.
+
 ## Mouse Gesture and Bullet Dictation (2026-10-03)
 
 `tests/test_mouse_gestures.py` uses synthetic coordinates only. It checks four-leg

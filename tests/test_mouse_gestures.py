@@ -134,6 +134,8 @@ def test_bullet_paste_and_raw_review_use_same_format(app_state, monkeypatch):
     copy = Mock()
     send = Mock()
     monkeypatch.setattr(app.pyperclip, "copy", copy)
+    monkeypatch.setattr(app.pyperclip, "paste", lambda: "- A thought\n")
+    monkeypatch.setattr(app, "add_bullet_html", Mock(return_value=True))
     monkeypatch.setattr(app, "send_paste_shortcut", send)
     assert app.paste_text("A thought", bullet_mode=True)
     copy.assert_called_once_with("- A thought\n")

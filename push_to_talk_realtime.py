@@ -31,6 +31,7 @@ from dataclasses import dataclass, field, replace
 from usage_tracking import UsageMeter, UsageStore, usage_path
 from transcription_progress import TimingEstimator
 from mouse_gestures import GestureMonitor
+from rich_clipboard import add_bullet_html
 from rewrite_review import RewriteReviewManager
 from output_transaction import output_transaction
 from pathlib import Path
@@ -1443,7 +1444,14 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
     if not prepared or not prepared.strip():
         return False
     pyperclip.copy(prepared)
-    if target is not None and try_insert_text_into_target(prepared, target):
+    rich_bullet = bullet_mode and add_bullet_html(prepared)
+    if bullet_mode:
+        APP_DIAGNOSTICS.emit("bullet_output", rich_clipboard=bool(rich_bullet))
+        if pyperclip.paste() != prepared:
+            log("[Paste] Clipboard changed during bullet preparation; paste skipped.")
+            return False
+    # Direct text insertion bypasses the editor's rich-paste handler.
+    if not rich_bullet and target is not None and try_insert_text_into_target(prepared, target):
         log("[Pasted] Inserted transcript into remembered target.")
         return True
     if target is not None and IS_WINDOWS and not foreground_matches_paste_target(target):
@@ -3069,7 +3077,7 @@ def deliver_session_output(
                 "skipped final paste to avoid duplicates."
             )
         elif not live_applied:
-            if outcome.review_raw:
+            if outcome.review_raw and not outcome.bullet_mode:
                 review_token = capture_rewrite_review(paste_target)
             elif rewrite_review_manager is not None:
                 with suppress(Exception):
