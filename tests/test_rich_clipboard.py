@@ -1,4 +1,5 @@
 import re
+import threading
 from unittest.mock import Mock
 from xml.etree import ElementTree
 
@@ -10,6 +11,13 @@ from rich_clipboard import (
     bullet_fragment,
     html_clipboard_payload,
 )
+
+
+@pytest.fixture(autouse=True)
+def active_app(monkeypatch):
+    import push_to_talk_realtime as app
+
+    monkeypatch.setattr(app, "shutdown_event", threading.Event())
 
 
 @pytest.mark.parametrize("text", ["Hello", "caf\u00e9 \U0001f600", "<script>&\"'", "\u4f60\u597d"])
@@ -146,6 +154,35 @@ def test_native_unicode_read_uses_bounded_global_memory():
     clipboard.kernel.GlobalLock.return_value = ctypes.addressof(allocation)
     assert clipboard.text() == "- caf\u00e9 \U0001f642\n"
     clipboard.kernel.GlobalUnlock.assert_called_once_with(123)
+
+
+def test_native_unicode_read_ignores_invalid_allocator_padding():
+    import ctypes
+
+    clipboard = WindowsClipboard.__new__(WindowsClipboard)
+    clipboard.user = Mock()
+    clipboard.kernel = Mock()
+    data = "hello\0".encode("utf-16-le") + b"\x00\xd8"
+    allocation = ctypes.create_string_buffer(data, len(data))
+    clipboard.user.GetClipboardData.return_value = 123
+    clipboard.kernel.GlobalSize.return_value = len(data)
+    clipboard.kernel.GlobalLock.return_value = ctypes.addressof(allocation)
+    assert clipboard.text() == "hello"
+    clipboard.kernel.GlobalUnlock.assert_called_once_with(123)
+
+
+def test_late_clipboard_change_during_paste_delay_does_not_paste(monkeypatch):
+    import push_to_talk_realtime as app
+
+    monkeypatch.setattr(app, "state", app.SessionState())
+    monkeypatch.setattr(app, "log", Mock())
+    monkeypatch.setattr(app.pyperclip, "copy", Mock())
+    monkeypatch.setattr(app.pyperclip, "paste", Mock(side_effect=["- hello.\n", "new text"]))
+    monkeypatch.setattr(app, "add_bullet_html", Mock(return_value=True))
+    send = Mock()
+    monkeypatch.setattr(app, "send_paste_shortcut", send)
+    assert not app.paste_text("hello", bullet_mode=True)
+    send.assert_not_called()
 
 
 def test_app_skips_output_when_clipboard_changes_during_rich_preparation(monkeypatch):

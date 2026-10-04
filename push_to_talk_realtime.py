@@ -1466,6 +1466,9 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
     if shutdown_event.is_set():
         return False
     try:
+        if bullet_mode and pyperclip.paste() != prepared:
+            log("[Paste] Clipboard changed before bullet paste; output skipped.")
+            return False
         send_paste_shortcut()
     except Exception as exc:  # pylint: disable=broad-except
         log("[Paste error]", exc)

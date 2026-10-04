@@ -14,6 +14,12 @@ responses, malformed protocol data and process-bound sends. Shutdown wakes outpu
 waiters and stops late pastes; old helper callbacks cannot terminate new helpers.
 Combined helper/app suite: 158 passed in 1.24 seconds.
 
+Clipboard tests also cover invalid allocator padding after a valid UTF-16
+terminator and a clipboard change during the paste delay. Full final verification:
+470 tests passed in 31.57 seconds; `ruff check .` and `ruff format --check .` pass
+for all 71 Python files. Four tracked bytecode files were removed from the index
+without deleting local copies. No live desktop/audio/API testing or restart.
+
 ## Rich Bullet Clipboard (2026-10-03)
 
 `tests/test_rich_clipboard.py` validates semantic list markup, escaped transcript

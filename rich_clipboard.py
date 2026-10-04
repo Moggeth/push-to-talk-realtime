@@ -66,7 +66,10 @@ class WindowsClipboard:
         if not pointer:
             return None
         try:
-            return ctypes.string_at(pointer, size).decode("utf-16-le").split("\0", 1)[0]
+            data = ctypes.string_at(pointer, size)
+            # GlobalSize can include allocator padding after the UTF-16 terminator.
+            end = next((i for i in range(0, size, 2) if data[i : i + 2] == b"\0\0"), None)
+            return data[:end].decode("utf-16-le") if end is not None else None
         finally:
             self.kernel.GlobalUnlock(handle)
 
