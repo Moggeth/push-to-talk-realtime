@@ -1,5 +1,13 @@
 # Testing (Plain Language)
 
+## Robustness Pass (2026-10-04)
+
+Timing-worker regression tests cover a full queue during shutdown, dead-worker
+enqueue prevention, explicit SQLite closure, restart without duplicate samples,
+thread-start failure, invalid clock values, and estimate/observation failures in
+both recorded and live finalization. Optional timing failures must never discard
+the transcript. Focused suite: 35 passed in 3.10 seconds.
+
 ## Rich Bullet Clipboard (2026-10-03)
 
 `tests/test_rich_clipboard.py` validates semantic list markup, escaped transcript

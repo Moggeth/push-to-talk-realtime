@@ -1,5 +1,6 @@
 import math
 import sqlite3
+import threading
 from dataclasses import replace
 
 import pytest
@@ -116,6 +117,85 @@ def test_corrupt_storage_is_nonfatal(tmp_path, caplog):
     estimator.observe("m", 10, 2)
     assert len(estimator._samples) == 1
     assert "dictation unaffected" in caplog.text
+    assert estimator._queue.empty()
+
+
+def test_timing_worker_closes_database_and_restarts_without_duplicate_history(
+    tmp_path, monkeypatch
+):
+    original = sqlite3.connect
+    connections = []
+
+    def connect(*args, **kwargs):
+        kwargs["check_same_thread"] = False
+        connection = original(*args, **kwargs)
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    estimator = TimingEstimator()
+    path = tmp_path / "timings.db"
+    estimator.start(path)
+    for _ in range(12):
+        estimator.observe("m", 10, 2)
+    estimator.close()
+    assert not estimator._worker.is_alive()
+    count = len(estimator._samples)
+    estimator.start(path)
+    estimator.close()
+    assert len(estimator._samples) == count
+    # This test allows cross-thread inspection solely to assert explicit closure.
+    assert len(connections) == 2
+    for connection in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            connection.execute("SELECT 1")
+
+
+def test_full_queue_does_not_lose_shutdown_signal(tmp_path, monkeypatch):
+    original = sqlite3.connect
+    entered, release = threading.Event(), threading.Event()
+
+    def connect(*args, **kwargs):
+        entered.set()
+        assert release.wait(3)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    estimator = TimingEstimator()
+    estimator.start(tmp_path / "timings.db")
+    assert entered.wait(1)
+    try:
+        for _ in range(MAX_SAMPLES):
+            estimator.observe("m", 10, 2)
+        assert estimator._queue.full()
+        estimator.close()
+    finally:
+        release.set()
+        estimator._worker.join(5)
+    assert not estimator._worker.is_alive()
+
+
+def test_timing_thread_start_failure_does_not_escape(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+
+    worker = Mock()
+    worker.start.side_effect = RuntimeError("cannot start thread")
+    monkeypatch.setattr(threading, "Thread", Mock(return_value=worker))
+    estimator = TimingEstimator()
+    estimator.start(tmp_path / "timings.db")
+    estimator.observe("m", 10, 2)
+    estimator.close()
+    assert estimator._worker is None
+    assert estimator._queue.empty()
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_invalid_clock_values_do_not_train_or_render(value):
+    estimator = TimingEstimator()
+    estimator.observe("m", 10, 2, now=value)
+    assert not estimator._samples
+    assert estimated_progress(0, value, 2) is None
+    assert estimated_progress(0, 2, value) is None
 
 
 @pytest.mark.parametrize("mode", ["raw", "tidy", "fun"])
@@ -161,7 +241,10 @@ def test_overlap_tracks_oldest_background_independently_of_recording():
 
 @pytest.mark.parametrize("live", [False, True])
 @pytest.mark.parametrize("text", ["", "raw words"])
-def test_stage_measurement_excludes_rewrite_and_empty_results(monkeypatch, live, text):
+@pytest.mark.parametrize("timing_failure", [None, "predict", "observe"])
+def test_stage_measurement_excludes_rewrite_and_empty_results(
+    monkeypatch, live, text, timing_failure
+):
     from unittest.mock import Mock
 
     import numpy as np
@@ -171,6 +254,8 @@ def test_stage_measurement_excludes_rewrite_and_empty_results(monkeypatch, live,
     clock = [100.0]
     estimator = Mock()
     estimator.predict.return_value = 4
+    if timing_failure:
+        getattr(estimator, timing_failure).side_effect = RuntimeError("optional timing failure")
     monkeypatch.setattr(app, "TRANSCRIPTION_TIMINGS", estimator)
     monkeypatch.setattr(app.time, "perf_counter", lambda: clock[0])
     monkeypatch.setattr(app, "state", app.SessionState())
@@ -198,7 +283,7 @@ def test_stage_measurement_excludes_rewrite_and_empty_results(monkeypatch, live,
     worker = Mock()
     worker.join.side_effect = lambda **k: transcribe()
     worker.is_alive.return_value = False
-    app.finalize_session_transcription(
+    result = app.finalize_session_transcription(
         chunks=[np.zeros(app.SAMPLE_RATE)],
         mode="dictation",
         audio_source="microphone",
@@ -216,6 +301,8 @@ def test_stage_measurement_excludes_rewrite_and_empty_results(monkeypatch, live,
         realtime_result={"text": text},
         session_id=1,
     )
+    assert result.error is None
+    assert result.final_text == ("processed" if text else "")
     if text:
         key, audio, elapsed = estimator.observe.call_args.args
         assert audio == 1

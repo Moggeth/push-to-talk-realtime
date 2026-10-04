@@ -2863,7 +2863,11 @@ def finalize_session_transcription(
         if transcription_engine == TRANSCRIPTION_ENGINE_LIVE
         else f"{transcription_engine}:{recorded_model}"
     )
-    expected_s = TRANSCRIPTION_TIMINGS.predict(timing_key, audio_duration_s) or 0.0
+    expected_s = 0.0
+    try:
+        expected_s = TRANSCRIPTION_TIMINGS.predict(timing_key, audio_duration_s) or 0.0
+    except Exception as exc:
+        log("[Metrics] Timing estimate unavailable; continuing dictation:", exc)
     if session_id is not None:
         with state.lock:
             state.indicator_jobs[session_id] = JobView(
@@ -2911,9 +2915,12 @@ def finalize_session_transcription(
             transcript_text = transcribe_audio(chunks, transcription_engine, recorded_model)
 
         if transcript_text.strip():
-            TRANSCRIPTION_TIMINGS.observe(
-                timing_key, audio_duration_s, time.perf_counter() - started_at
-            )
+            try:
+                TRANSCRIPTION_TIMINGS.observe(
+                    timing_key, audio_duration_s, time.perf_counter() - started_at
+                )
+            except Exception as exc:
+                log("[Metrics] Timing observation failed; preserving transcript:", exc)
         processed_text = transcript_text
         archive_entry_id: int | None = None
         post_process_status = "not_requested"

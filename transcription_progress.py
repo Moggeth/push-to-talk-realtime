@@ -9,6 +9,7 @@ import sqlite3
 import threading
 import time
 from collections import deque
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,7 +26,7 @@ class Sample:
 
 
 def estimated_progress(started_at: float, expected_s: float, now: float) -> float | None:
-    if expected_s <= 0:
+    if expected_s <= 0 or not all(math.isfinite(v) for v in (started_at, expected_s, now)):
         return None
     elapsed = max(0.0, now - started_at)
     # 85% at the estimate; an outstanding request never paints a complete ring.
@@ -36,7 +37,9 @@ class TimingEstimator:
     def __init__(self):
         self._samples: deque[Sample] = deque(maxlen=MAX_SAMPLES)
         self._lock = threading.Lock()
-        self._queue: queue.Queue[Sample | None] = queue.Queue(maxsize=MAX_SAMPLES)
+        self._lifecycle_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._queue: queue.Queue[Sample] = queue.Queue(maxsize=MAX_SAMPLES)
         self._worker: threading.Thread | None = None
 
     def predict(self, key: str, audio_s: float, *, now: float | None = None) -> float | None:
@@ -74,35 +77,46 @@ class TimingEstimator:
         return max(0.05, quantile(0.7))
 
     def observe(self, key: str, audio_s: float, elapsed_s: float, *, now=None):
-        if not all(math.isfinite(v) and v > 0 for v in (audio_s, elapsed_s)):
+        now = time.time() if now is None else now
+        if not all(math.isfinite(v) and v > 0 for v in (audio_s, elapsed_s, now)):
             return
-        sample = Sample(key, audio_s, elapsed_s, time.time() if now is None else now)
+        sample = Sample(key, audio_s, elapsed_s, now)
         with self._lock:
             self._samples.append(sample)
-        if self._worker is not None:
+        with self._lifecycle_lock:
+            if self._worker is None or not self._worker.is_alive() or self._stop.is_set():
+                return
             try:
                 self._queue.put_nowait(sample)
             except queue.Full:
                 logging.getLogger(__name__).warning("Timing persistence queue full; sample skipped")
 
     def start(self, path: Path):
-        if self._worker is not None:
-            return
-        self._worker = threading.Thread(target=self._persist, args=(path,), daemon=True)
-        self._worker.start()
+        with self._lifecycle_lock:
+            if self._worker is not None and self._worker.is_alive():
+                return
+            self._stop.clear()
+            self._queue = queue.Queue(maxsize=MAX_SAMPLES)
+            self._worker = threading.Thread(target=self._persist, args=(path,), daemon=True)
+            try:
+                self._worker.start()
+            except Exception:
+                self._worker = None
+                logging.getLogger(__name__).exception(
+                    "Timing worker unavailable; dictation unaffected"
+                )
 
     def close(self):
-        if self._worker is not None:
-            try:
-                self._queue.put(None, timeout=0.1)
-            except queue.Full:
-                return
-            self._worker.join(timeout=0.5)
+        with self._lifecycle_lock:
+            self._stop.set()
+            worker = self._worker
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=0.5)
 
     def _persist(self, path):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(path, timeout=0.2) as db:
+            with closing(sqlite3.connect(path, timeout=0.2)) as db:
                 db.execute(
                     "CREATE TABLE IF NOT EXISTS timings "
                     "(key TEXT, audio REAL, elapsed REAL, at REAL)"
@@ -121,11 +135,14 @@ class TimingEstimator:
                     ):
                         loaded.append(Sample(key, audio, elapsed, at))
                 with self._lock:
-                    self._samples = deque([*loaded, *self._samples], maxlen=MAX_SAMPLES)
-                while True:
-                    sample = self._queue.get()
-                    if sample is None:
-                        break
+                    self._samples = deque(
+                        dict.fromkeys([*loaded, *self._samples]), maxlen=MAX_SAMPLES
+                    )
+                while not self._stop.is_set() or not self._queue.empty():
+                    try:
+                        sample = self._queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
                     db.execute(
                         "INSERT INTO timings VALUES (?,?,?,?)",
                         (sample.key, sample.audio_s, sample.elapsed_s, sample.at),
