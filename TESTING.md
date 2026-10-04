@@ -8,6 +8,12 @@ thread-start failure, invalid clock values, and estimate/observation failures in
 both recorded and live finalization. Optional timing failures must never discard
 the transcript. Focused suite: 35 passed in 3.10 seconds.
 
+`tests/test_shutdown_and_helper_recovery.py` reproduces queued output at shutdown,
+shutdown between grant/paste, helper replacement during close, stale reader
+responses, malformed protocol data and process-bound sends. Shutdown wakes output
+waiters and stops late pastes; old helper callbacks cannot terminate new helpers.
+Combined helper/app suite: 158 passed in 1.24 seconds.
+
 ## Rich Bullet Clipboard (2026-10-03)
 
 `tests/test_rich_clipboard.py` validates semantic list markup, escaped transcript

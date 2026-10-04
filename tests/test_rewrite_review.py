@@ -152,10 +152,13 @@ def test_multiline_provider_newlines(backend):
 
 
 def test_stalled_helper_capture_is_bounded_and_recovers(monkeypatch):
+    from unittest.mock import Mock
+
     manager = RewriteReviewManager()
+    manager.process = process = Mock()
     monkeypatch.setattr(manager, "start", lambda: True)
     calls = []
     monkeypatch.setattr(manager, "close", lambda **kwargs: calls.append(kwargs))
     assert manager.capture(None) is None
-    assert calls == [{"wait": False}]
+    assert calls == [{"wait": False, "expected_process": process}]
     assert not manager.pending

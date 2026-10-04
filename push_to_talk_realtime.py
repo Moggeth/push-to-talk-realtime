@@ -1440,6 +1440,8 @@ def paste_text(text: str, target: PasteTarget | None = None, *, bullet_mode: boo
 
 def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet_mode=False):
     """Paste text into the remembered control when possible, then fall back safely."""
+    if shutdown_event.is_set():
+        return False
     prepared = prepare_clipboard_text(text, bullet_mode=bullet_mode)
     if not prepared or not prepared.strip():
         return False
@@ -1461,6 +1463,8 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
         log("[Paste] Clipboard still contains the transcript.")
         return False
     time.sleep(0.02)
+    if shutdown_event.is_set():
+        return False
     try:
         send_paste_shortcut()
     except Exception as exc:  # pylint: disable=broad-except
@@ -1573,6 +1577,8 @@ def wait_for_output_turn(session_id: int) -> bool:
     deadline = time.monotonic() + OUTPUT_TURN_WAIT_TIMEOUT_S
     with state.output_condition:
         while True:
+            if shutdown_event.is_set():
+                return False
             if session_id == state.next_output_session_id:
                 return True
             if session_id < state.next_output_session_id:
@@ -1586,7 +1592,13 @@ def wait_for_output_turn(session_id: int) -> bool:
                 state.next_output_session_id = session_id
                 state.output_condition.notify_all()
                 return True
-            state.output_condition.wait(timeout=remaining_s)
+            state.output_condition.wait(timeout=min(remaining_s, 0.25))
+
+
+def request_shutdown() -> None:
+    shutdown_event.set()
+    with state.output_condition:
+        state.output_condition.notify_all()
 
 
 def advance_output_turn() -> None:
@@ -3034,6 +3046,8 @@ def deliver_session_output(
         return
     result = "error" if outcome.error is not None else ""
     try:
+        if shutdown_event.is_set():
+            return
         with state.lock:
             state.transcript_final = outcome.final_text
         if outcome.error is not None:
@@ -3063,6 +3077,8 @@ def deliver_session_output(
         if dictation_history_enabled:
             append_dictation_history_entry(outcome.final_text)
         log("\n[Final]:", outcome.final_text)
+        if shutdown_event.is_set():
+            return
         if not PASTE_ON_RELEASE:
             if outcome.review_raw:
                 show_rewrite_review(outcome.review_raw, outcome.final_text)
@@ -4804,7 +4820,7 @@ def tray_setup(_icon: TrayIconLike) -> None:
 
 def tray_exit(icon: TrayIconLike | None, _item=None) -> None:
     global tray_status_signature
-    shutdown_event.set()
+    request_shutdown()
     stop_cursor_activity_indicator()
     stop_warm_microphone_watchdog()
     warm_microphone_capture.stop()
@@ -4875,6 +4891,7 @@ def main() -> int:
         APP_DIAGNOSTICS.emit("exception", exception=exc, reason="unhandled")
         raise
     finally:
+        request_shutdown()
         TRANSCRIPTION_TIMINGS.close()
         mouse_gesture_monitor.close()
         stop_cursor_activity_indicator()
@@ -4882,7 +4899,6 @@ def main() -> int:
         warm_microphone_capture.stop()
         stop_input_listeners()
         stop_transcript_browser()
-        shutdown_event.set()
         instance_guard.release()
         close_native_trace(native_trace)
         APP_DIAGNOSTICS.end(

@@ -64,6 +64,12 @@ class RewriteReviewManager:
                 ).start()
                 return True
             except Exception as exc:
+                process, self.process = self.process, None
+                with suppress(queue.Full):
+                    self.outgoing.put_nowait(None)
+                if process is not None:
+                    with suppress(OSError):
+                        process.terminate()
                 self.log("[Review] helper_start_failed", type(exc).__name__)
                 return False
 
@@ -78,11 +84,19 @@ class RewriteReviewManager:
                 process.stdin.flush()
         except (OSError, ValueError):
             self.log("[Review] helper_pipe_closed")
+            self.close(wait=False, expected_process=process)
+        finally:
+            with suppress(OSError, ValueError):
+                process.stdin.close()
 
     def _read(self, process, outgoing):
         try:
             for line in process.stdout:
                 response = json.loads(line)
+                if not isinstance(response, dict) or (
+                    response.get("id") is not None and type(response["id"]) is not int
+                ):
+                    raise ValueError("invalid_helper_response")
                 if response.get("error"):
                     self.log("[Review] helper_error", response["error"])
                 if response.get("event") == "review_visible":
@@ -92,20 +106,28 @@ class RewriteReviewManager:
                         bool(response.get("mapped")),
                     )
                 with self.lock:
-                    waiter = self.pending.get(response.get("id"))
+                    waiter = (
+                        self.pending.get(response.get("id")) if self.process is process else None
+                    )
                 if waiter is not None:
                     waiter.set()
         except (OSError, ValueError):
             self.log("[Review] helper_response_failed")
         finally:
+            self.close(wait=False, expected_process=process)
             with suppress(queue.Full):
                 outgoing.put_nowait(None)
+            with suppress(OSError, ValueError):
+                process.stdout.close()
             if process.poll() not in (None, 0):
                 self.log("[Review] helper_exited", process.returncode)
 
-    def _send(self, message):
+    def _send(self, message, *, expected_process=None):
         try:
-            self.outgoing.put_nowait(message)
+            with self.lock:
+                if expected_process is not None and self.process is not expected_process:
+                    return False
+                self.outgoing.put_nowait(message)
             return True
         except queue.Full:
             self.log("[Review] helper_queue_full")
@@ -115,23 +137,28 @@ class RewriteReviewManager:
         if not self.start():
             return None
         with self.lock:
+            process = self.process
+            if process is None:
+                return None
             self.sequence += 1
             token = self.sequence
             waiter = self.pending[token] = threading.Event()
-        self._send(
+        sent = self._send(
             {
                 "command": "capture",
                 "id": token,
                 "target": asdict(target) if target is not None else None,
-            }
+            },
+            expected_process=process,
         )
         # Slow or unresponsive accessibility providers must never block dictation.
-        ready = waiter.wait(0.25)
+        ready = sent and waiter.wait(0.25)
         with self.lock:
             self.pending.pop(token, None)
+            ready = ready and self.process is process
         if not ready:
             self.log("[Review] capture_timeout")
-            self.close(wait=False)
+            self.close(wait=False, expected_process=process)
             return None
         return token
 
@@ -143,16 +170,27 @@ class RewriteReviewManager:
         )
 
     def dismiss(self):
-        if self.process is not None and self.process.poll() is None:
-            self._send({"command": "dismiss"})
+        with self.lock:
+            process = self.process
+            running = process is not None and process.poll() is None
+        if running:
+            self._send({"command": "dismiss"}, expected_process=process)
 
-    def close(self, *, wait=True):
-        self.dismiss()
-        if self.process is not None and self.process.poll() is None:
+    def close(self, *, wait=True, expected_process=None):
+        with self.lock:
+            process = self.process
+            if expected_process is not None and process is not expected_process:
+                return
+            self.process = None
+            with suppress(queue.Full):
+                self.outgoing.put_nowait(None)
+            for waiter in self.pending.values():
+                waiter.set()
+        if process is not None and process.poll() is None:
             # This helper owns no capture, API request or persistent state.
             try:
-                self.process.terminate()
+                process.terminate()
                 if wait:
-                    self.process.wait(timeout=0.5)
+                    process.wait(timeout=0.5)
             except (OSError, subprocess.TimeoutExpired):
                 pass
