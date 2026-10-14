@@ -32,6 +32,7 @@ from usage_tracking import UsageMeter, UsageStore, usage_path
 from transcription_progress import TimingEstimator
 from mouse_gestures import GestureMonitor
 from rich_clipboard import add_bullet_html
+from swiftpoint_haptics import BulletHaptics
 from rewrite_review import RewriteReviewManager
 from output_transaction import output_transaction
 from pathlib import Path
@@ -696,8 +697,8 @@ def _primary_cursor_snapshot() -> CursorIndicatorSnapshot:
         return CursorIndicatorSnapshot(
             True,
             color,
-            label=(rewrite_mode.title() if show_labels else "")
-            + (" \u2022 \u2022 \u2022" if bullet_mode else ""),
+            label=rewrite_mode.title() if show_labels else "",
+            bullet_mode=bullet_mode,
             mode=rewrite_mode,
             audio_level=min(1.0, max(0.0, rms * 12.0)) if audio_age < 0.25 else 0.0,
         )
@@ -3860,6 +3861,9 @@ def _gesture_recording_token_locked() -> int | None:
     return None
 
 
+bullet_haptics = BulletHaptics()
+
+
 def toggle_bullet_mode(_icon=None, _item=None, *, recording_token=None) -> None:
     with state.lock:
         if recording_token is not None and _gesture_recording_token_locked() != recording_token:
@@ -3869,6 +3873,7 @@ def toggle_bullet_mode(_icon=None, _item=None, *, recording_token=None) -> None:
     log("[Bullets]", "Enabled" if enabled else "Disabled")
     APP_DIAGNOSTICS.emit("bullet_mode_changed", bullet_mode=enabled)
     refresh_tray_menu()
+    bullet_haptics.notify(enabled)
 
 
 def toggle_mouse_gesture(_icon=None, _item=None) -> None:

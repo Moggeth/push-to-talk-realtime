@@ -88,6 +88,7 @@ class CursorIndicatorSnapshot:
     audio_level: float = 0.0
     jobs: tuple[JobView, ...] = ()
     terminals: tuple[TerminalView, ...] = ()
+    bullet_mode: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,7 @@ class IndicatorVisual:
     mode_mix: float = 1.0
     activity: str = "recording"
     orbits: tuple[OrbitFrame, ...] = ()
+    bullet_mode: bool = False
 
 
 class BackgroundOrbit:
@@ -471,6 +473,7 @@ class IndicatorAnimator:
             self.previous_mode,
             min(1.0, max(0.0, (now - self.mode_changed_at) / 0.1)),
             effective_snapshot.activity,
+            bullet_mode=effective_snapshot.bullet_mode,
         )
 
     def _hidden_visual(self) -> IndicatorVisual:
@@ -563,6 +566,7 @@ def render_indicator_image(
     mode_mix: float = 1.0,
     activity: str = "recording",
     orbits: tuple[OrbitFrame, ...] = (),
+    bullet_mode: bool = False,
 ) -> Image.Image:
     if previous_mode is not None and previous_mode != mode and mode_mix < 1.0:
         common = {
@@ -572,6 +576,7 @@ def render_indicator_image(
             "label": label,
             "activity": activity,
             "orbits": orbits,
+            "bullet_mode": bullet_mode,
         }
         return Image.blend(
             render_indicator_image(frame, color, mode=previous_mode, **common),
@@ -640,7 +645,7 @@ def render_indicator_image(
     if label:
         font = indicator_label_font(scale)
         draw.text(
-            (center, render_size - 5 * scale),
+            (center, render_size - (12 if bullet_mode else 5) * scale),
             label,
             font=font,
             anchor="mb",
@@ -648,6 +653,16 @@ def render_indicator_image(
             stroke_width=scale,
             stroke_fill=(20, 20, 20, round(230 * alpha_scale)),
         )
+    if bullet_mode:
+        # Geometry, not font glyphs: consistent even with the bundled fallback font.
+        y = render_size - 7 * scale
+        r = 1.5 * scale
+        for offset in (-6, 0, 6):
+            x = center + offset * scale
+            draw.ellipse(
+                (x - r, y - r, x + r, y + r),
+                fill=(255, 255, 255, round(255 * alpha_scale)),
+            )
     if activity == "rewriting" and radius > 5 * scale:
         draw.arc(
             (
@@ -1011,6 +1026,7 @@ class CursorActivityIndicator:
                 mode_mix=visual.mode_mix,
                 activity=visual.activity,
                 orbits=visual.orbits,
+                bullet_mode=visual.bullet_mode,
             )
             pixels = premultiplied_bgra_bytes(image)
             ctypes.memmove(pixel_buffer, pixels, len(pixels))

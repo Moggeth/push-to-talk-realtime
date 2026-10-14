@@ -23,6 +23,37 @@ MICROPHONE_COLOR = (220, 53, 69, 255)
 TRANSCRIBING_COLOR = (255, 166, 0, 255)
 
 
+def test_bullet_dots_render_without_font_glyphs(monkeypatch):
+    def no_font(*args):
+        raise AssertionError("Bullet dots must not use a font")
+
+    monkeypatch.setattr("cursor_indicator.indicator_label_font", no_font)
+    animator = IndicatorAnimator()
+    snapshot = CursorIndicatorSnapshot(True, MICROPHONE_COLOR, bullet_mode=True)
+    animator.update(snapshot, 0)
+    visual = animator.update(snapshot, 0.3)
+    assert visual.bullet_mode
+    image = render_indicator_image(visual.frame, visual.color, bullet_mode=True)
+    for x in (42, 48, 54):
+        assert image.getpixel((x, 89))[3] > 200
+    assert image.getpixel((45, 89))[3] < 30
+    hidden = render_indicator_image(visual.frame, visual.color, bullet_mode=True, opacity=0)
+    assert hidden.getchannel("A").getbbox() is None
+
+
+def test_bullet_dots_survive_mode_crossfade():
+    image = render_indicator_image(
+        indicator_frame(0.3),
+        MICROPHONE_COLOR,
+        bullet_mode=True,
+        label="Tidy",
+        mode="tidy",
+        previous_mode="raw",
+        mode_mix=0.5,
+    )
+    assert image.getpixel((48, 89))[3] > 200
+
+
 def test_indicator_frame_rotates_and_gently_pulses():
     first = indicator_frame(0.0)
     later = indicator_frame(0.5)

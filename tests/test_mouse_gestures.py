@@ -86,6 +86,7 @@ def app_state(monkeypatch):
     monkeypatch.setattr(app, "state", app.SessionState())
     monkeypatch.setattr(app, "log", Mock())
     monkeypatch.setattr(app, "refresh_tray_menu", Mock())
+    monkeypatch.setattr(app, "bullet_haptics", Mock())
     monkeypatch.setattr(app, "update_tray_status", Mock())
     monkeypatch.setattr(app, "shutdown_event", Mock(is_set=lambda: False))
     app.state.is_listening = True
@@ -115,16 +116,20 @@ def test_toggle_is_gated_and_revalidates_session_under_lock(app_state, change):
         app.state.active_session_id = 13
     app.toggle_bullet_mode(recording_token=12)
     assert not app.state.bullet_mode
+    app.bullet_haptics.notify.assert_not_called()
 
 
 def test_toggle_feedback_and_release_latching(app_state):
     app = app_state
     app.toggle_bullet_mode(recording_token=12)
     assert app.state.bullet_mode
-    assert "\u2022" in app.cursor_indicator_snapshot().label
+    app.bullet_haptics.notify.assert_called_once_with(True)
+    assert app.cursor_indicator_snapshot().bullet_mode
+    assert "\u2022" not in app.cursor_indicator_snapshot().label
     captured = app.finish_capture_session(12)
     assert captured.bullet_mode
     app.toggle_bullet_mode()
+    app.bullet_haptics.notify.assert_called_with(False)
     assert not app.state.bullet_mode
     assert captured.bullet_mode
 

@@ -1,5 +1,22 @@
 # Testing (Plain Language)
 
+## Bullet Feedback (2026-10-15)
+
+Font-independent pixel tests cover all three dots, opacity, mode crossfade and
+snapshot propagation. Gesture tests verify on/off haptic notifications and no
+notification for rejected gestures. Haptic tests fake the pipe/subprocess and
+cover exact commands, handle cleanup on read failure, timeouts, a busy worker,
+thread startup failure and unsupported platforms. Focused suite: 53 passed in
+1.49 seconds. A live, explicit 45 ms pulse received an OK response from this
+machine's X1 API; perceived strength still needs user acceptance. Full regression:
+477 passed in 36.08 seconds; Ruff lint and format checks pass (73 files). No desktop
+control, pointer movement, clipboard changes or running-app restart.
+
+Activate with the normal tray Restart. If vibration is absent, check X1's
+**Enable X1 API** option and restart X1, not the dictation audio stack. Missing
+X1 is intentionally nonfatal. Native pipe calls run in a short-lived helper so
+even an unresponsive pipe cannot hold the gesture/recording thread.
+
 ## Robustness Pass (2026-10-04)
 
 Timing-worker regression tests cover a full queue during shutdown, dead-worker
