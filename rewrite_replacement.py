@@ -69,6 +69,33 @@ class WindowsTextReplacement:
         except Exception:
             return False
 
+    def caret_context(self, expected_target):
+        """Read bounded adjacent text; never select, copy, or read passwords."""
+        if self.automation is None or not expected_target:
+            return None
+        try:
+            from dataclasses import asdict
+
+            target, _, _, selection = self._focused()
+            if target is None or asdict(target) != expected_target:
+                return None
+            before = selection.Clone()
+            before.MoveEndpointByRange(1, selection, 0)
+            before.MoveEndpointByUnit(0, 0, -256)
+            after = selection.Clone()
+            after.MoveEndpointByRange(0, selection, 1)
+            after.MoveEndpointByUnit(1, 0, 256)
+            from platform_input import capture_paste_target
+
+            if capture_paste_target() != target:
+                return None
+            return {
+                "before": canonical(before.GetText(256)),
+                "after": canonical(after.GetText(256)),
+            }
+        except Exception:
+            return None
+
     def attach(self, processed):
         self.current = canonical(processed)
         self.caret = None

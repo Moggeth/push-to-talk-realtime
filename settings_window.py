@@ -41,6 +41,12 @@ class SettingsWindow:
         self.device.set(payload["device"])
         self.device.grid(sticky="ew", pady=(6, 22))
         self.add_flag(recording, "toggle_mode_enabled", "Tap to start / stop")
+        ttk.Label(recording, text="Text insertion").grid(sticky="w", pady=(18, 6))
+        self.insertion = ttk.Combobox(
+            recording, state="readonly", values=["Auto", "Standalone", "Insert"]
+        )
+        self.insertion.set(payload.get("insertion_mode", "auto").title())
+        self.insertion.grid(sticky="ew")
         ttk.Label(recording, text="Paste suffix").grid(sticky="w", pady=(22, 6))
         self.suffix = ttk.Combobox(recording, state="readonly", values=["None", "Space", "Newline"])
         self.suffix.current(payload["suffix"])
@@ -89,7 +95,13 @@ class SettingsWindow:
         ttk.Button(footer, text="Save", command=self.save).pack(side="right", padx=8)
         root.bind("<Escape>", lambda _: root.destroy())
         root.bind("<Control-s>", lambda _: self.save())
-        for combo in (self.transcription, self.device, self.suffix, *self.models.values()):
+        for combo in (
+            self.transcription,
+            self.device,
+            self.insertion,
+            self.suffix,
+            *self.models.values(),
+        ):
             combo.configure(font=("Segoe UI", 11))
         root.option_add("*TCombobox*Listbox.font", ("Segoe UI", 11))
         root.after(100, root.lift)
@@ -136,6 +148,7 @@ class SettingsWindow:
             "transcription": self.transcription.get(),
             "device": self.device.get(),
             "suffix": self.suffix.current(),
+            "insertion_mode": self.insertion.get().lower(),
         }
         self.root.destroy()
 

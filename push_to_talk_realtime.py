@@ -32,6 +32,7 @@ from usage_tracking import UsageMeter, UsageStore, usage_path
 from transcription_progress import TimingEstimator
 from mouse_gestures import GestureMonitor
 from rich_clipboard import add_bullet_html
+from insertion_formatting import INSERTION_MODES, InsertionPlan, choose_plan, format_insertion
 from swiftpoint_haptics import BulletHaptics
 from rewrite_review import RewriteReviewManager
 from output_transaction import output_transaction
@@ -503,6 +504,10 @@ class SessionState:
     indicator_jobs: dict[int, JobView] = field(default_factory=dict)
     indicator_terminals: deque = field(default_factory=lambda: deque(maxlen=16))
     paste_suffix_mode: str = DEFAULT_SUFFIX_MODE
+    insertion_mode: str = "auto"
+    insertion_feedback: str = ""
+    insertion_feedback_at: float = 0.0
+    last_output_preparation: tuple[str, InsertionPlan] | None = None
     bullet_mode: bool = False
     mouse_gesture_enabled: bool = True
     punctuation_terminal: bool = True
@@ -662,6 +667,11 @@ def cursor_indicator_snapshot() -> CursorIndicatorSnapshot:
         jobs = tuple(state.indicator_jobs[key] for key in sorted(state.indicator_jobs))
         terminals = tuple(state.indicator_terminals)
     snapshot = _primary_cursor_snapshot()
+    with state.lock:
+        feedback = state.insertion_feedback
+        feedback_age = time.monotonic() - state.insertion_feedback_at
+    if feedback and feedback_age < 2.5:
+        snapshot = replace(snapshot, visible=True, label=feedback)
     if jobs and snapshot.activity in ("transcribing", "rewriting"):
         job = jobs[-1]
         rewriting = job.phase == "rewriting"
@@ -951,6 +961,7 @@ def _save_settings_to_disk() -> bool:
             "rewrite_profiles": state.rewrite_profiles,
             "feedback": {key: getattr(state, key) for key in SETTINGS_FLAGS},
             "paste_suffix_mode": state.paste_suffix_mode,
+            "insertion_mode": state.insertion_mode,
             "mouse_gesture_enabled": state.mouse_gesture_enabled,
             "input_device_label": state.dictation_device_label,
         }
@@ -1044,6 +1055,9 @@ def apply_persisted_settings() -> None:
             for key in SETTINGS_FLAGS:
                 if isinstance(feedback.get(key), bool):
                     setattr(state, key, feedback[key])
+        insertion_mode = settings.get("insertion_mode", "auto")
+        if insertion_mode in INSERTION_MODES:
+            state.insertion_mode = insertion_mode
         suffix = settings.get("paste_suffix_mode")
         if isinstance(settings.get("mouse_gesture_enabled"), bool):
             state.mouse_gesture_enabled = settings["mouse_gesture_enabled"]
@@ -1370,6 +1384,9 @@ def restart_helper_command() -> list[str]:
 
 def _prewarm_transcription_stack() -> None:
     try:
+        if rewrite_review_manager is not None:
+            with suppress(Exception):
+                rewrite_review_manager.start()
         if not OPENAI_API_KEY:
             return
         start = time.perf_counter()
@@ -1444,9 +1461,30 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
     if shutdown_event.is_set():
         return False
     prepared = prepare_clipboard_text(text, bullet_mode=bullet_mode)
+    with state.lock:
+        insertion_mode = state.insertion_mode
+        state.last_output_preparation = None
+    context = None
+    if not bullet_mode and insertion_mode != "standalone" and rewrite_review_manager is not None:
+        try:
+            context = rewrite_review_manager.caret_context(target)
+        except Exception:
+            log("[Insertion] Local context unavailable")
+    plan = choose_plan(insertion_mode, context, bullet=bullet_mode)
+    if not bullet_mode:
+        prepared = format_insertion(text, plan, prepared)
+    with state.lock:
+        state.last_output_preparation = (prepared, plan)
+    # Only the decision is logged. Adjacent editor text stays in memory locally.
+    log("[Insertion]", plan.label)
     if not prepared or not prepared.strip():
         return False
+    if shutdown_event.is_set():
+        return False
     pyperclip.copy(prepared)
+    if context is not None and capture_paste_target() != target:
+        log("[Insertion] Focus changed; transcript left on clipboard")
+        return False
     rich_bullet = bullet_mode and add_bullet_html(prepared)
     if bullet_mode:
         APP_DIAGNOSTICS.emit("bullet_output", rich_clipboard=bool(rich_bullet))
@@ -1455,6 +1493,7 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
             return False
     # Direct text insertion bypasses the editor's rich-paste handler.
     if not rich_bullet and target is not None and try_insert_text_into_target(prepared, target):
+        show_insertion_feedback(plan.label)
         log("[Pasted] Inserted transcript into remembered target.")
         return True
     if target is not None and IS_WINDOWS and not foreground_matches_paste_target(target):
@@ -1466,6 +1505,9 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
     time.sleep(0.02)
     if shutdown_event.is_set():
         return False
+    if context is not None and capture_paste_target() != target:
+        log("[Insertion] Focus changed before paste; transcript left on clipboard")
+        return False
     try:
         if bullet_mode and pyperclip.paste() != prepared:
             log("[Paste] Clipboard changed before bullet paste; output skipped.")
@@ -1475,7 +1517,14 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
         log("[Paste error]", exc)
         log("[Paste error] Clipboard still contains the transcript.")
         return False
+    show_insertion_feedback(plan.label)
     return True
+
+
+def show_insertion_feedback(label: str) -> None:
+    with state.lock:
+        state.insertion_feedback = label
+        state.insertion_feedback_at = time.monotonic()
 
 
 def send_backspaces(count: int) -> None:
@@ -3104,6 +3153,8 @@ def deliver_session_output(
                 "skipped final paste to avoid duplicates."
             )
         elif not live_applied:
+            with state.lock:
+                state.last_output_preparation = None
             if outcome.review_raw and not outcome.bullet_mode:
                 review_token = capture_rewrite_review(paste_target)
             elif rewrite_review_manager is not None:
@@ -3114,13 +3165,24 @@ def deliver_session_output(
                 if outcome.bullet_mode
                 else paste_text(outcome.final_text, paste_target)
             )
+            with state.lock:
+                preparation = state.last_output_preparation
+            if preparation is not None:
+                prepared_final, _ = preparation
             if pasted:
                 log("[Pasted] Transcript output completed.")
             else:
                 log("[Clipboard] Transcript copied, but paste was not sent.")
         if outcome.review_raw:
+            prepared_raw = prepare_clipboard_text(
+                outcome.review_raw, bullet_mode=outcome.bullet_mode
+            )
+            with state.lock:
+                preparation = state.last_output_preparation
+            if preparation is not None and not outcome.bullet_mode and not live_applied:
+                prepared_raw = format_insertion(outcome.review_raw, preparation[1], prepared_raw)
             show_rewrite_review(
-                prepare_clipboard_text(outcome.review_raw, bullet_mode=outcome.bullet_mode),
+                prepared_raw,
                 prepared_final,
                 review_token,
                 pasted,
@@ -4406,8 +4468,19 @@ def build_history_menu() -> pystray.Menu:
     )
 
 
+def insertion_menu_item(mode: str):
+    return pystray.MenuItem(
+        f"Insertion: {mode.title()}",
+        lambda _icon, _item: set_insertion_mode(mode),
+        radio=True,
+        checked=lambda _item: state.insertion_mode == mode,
+    )
+
+
 def build_punctuation_menu() -> pystray.Menu:
     return pystray.Menu(
+        *(insertion_menu_item(mode) for mode in INSERTION_MODES),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem(
             "Suffix: None",
             lambda _icon, _item: set_paste_suffix_mode(SUFFIX_NONE),
@@ -4473,6 +4546,15 @@ def build_recording_mode_menu() -> pystray.Menu:
 settings_window_lock = threading.Lock()
 
 
+def set_insertion_mode(mode: str) -> None:
+    if mode not in INSERTION_MODES:
+        return
+    with state.lock:
+        state.insertion_mode = mode
+    save_settings_to_disk()
+    refresh_tray_menu()
+
+
 def settings_window_payload() -> dict:
     with state.lock:
         profiles = {mode: dict(profile) for mode, profile in state.rewrite_profiles.items()}
@@ -4481,6 +4563,7 @@ def settings_window_payload() -> dict:
         flags = {key: getattr(state, key) for key in SETTINGS_FLAGS}
         transcription = state.transcription_engine
         suffix = state.paste_suffix_mode
+        insertion_mode = state.insertion_mode
         device = state.dictation_device_label
     defaults = {
         "tidy": POST_PROCESS_INSTRUCTION_PROFILES["clean_up"],
@@ -4499,6 +4582,7 @@ def settings_window_payload() -> dict:
         "defaults": defaults,
         "model_labels": POST_PROCESS_MODEL_LABELS,
         "flags": flags,
+        "insertion_mode": insertion_mode,
         "suffix": (SUFFIX_NONE, SUFFIX_SPACE, SUFFIX_NEWLINE).index(suffix),
         "transcription": "GPT Live Transcribe"
         if transcription == TRANSCRIPTION_ENGINE_LIVE
@@ -4520,6 +4604,9 @@ def apply_settings_window_result(result: dict) -> None:
             or not profiles[mode]["instructions"].strip()
         ):
             raise ValueError("Invalid rewrite profile")
+    insertion_mode = result.get("insertion_mode", "auto")
+    if insertion_mode not in INSERTION_MODES:
+        raise ValueError("Invalid insertion mode")
     suffix = (SUFFIX_NONE, SUFFIX_SPACE, SUFFIX_NEWLINE)[result["suffix"]]
     engine = (
         TRANSCRIPTION_ENGINE_LIVE
@@ -4535,6 +4622,7 @@ def apply_settings_window_result(result: dict) -> None:
         state.transcription_engine = engine
         state.recorded_transcription_model = DEFAULT_RECORDED_TRANSCRIBE_MODEL
         state.paste_suffix_mode = suffix
+        state.insertion_mode = insertion_mode
         for key in SETTINGS_FLAGS:
             setattr(state, key, bool(result["flags"][key]))
     if result["device"] != current_input_device_label():

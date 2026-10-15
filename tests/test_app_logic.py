@@ -723,6 +723,7 @@ def test_save_settings_to_disk_includes_hotkeys(monkeypatch, tmp_path: Path):
         "feedback": {key: getattr(app.state, key) for key in app.SETTINGS_FLAGS},
         "paste_suffix_mode": app.state.paste_suffix_mode,
         "mouse_gesture_enabled": True,
+        "insertion_mode": "auto",
         "input_device_label": app.state.dictation_device_label,
     }
 
@@ -2089,6 +2090,10 @@ def test_menu_builders_include_expected_top_level_items(monkeypatch):
     menu = app.build_menu()
 
     assert [item.text for item in punctuation_menu] == [
+        "Insertion: Auto",
+        "Insertion: Standalone",
+        "Insertion: Insert",
+        str(app.pystray.Menu.SEPARATOR),
         "Suffix: None",
         "Suffix: Space",
         "Suffix: Newline",

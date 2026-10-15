@@ -1,5 +1,27 @@
 # Testing (Plain Language)
 
+## Local Insertion (2026-10-15)
+
+`tests/test_insertion_formatting.py` covers the reported mid-sentence example,
+left/right word spacing, adjacent punctuation, names, acronyms, I, decimals,
+abbreviations, ellipses, empty documents, paragraph boundaries, explicit modes,
+unavailable-context fallback, and unchanged bullet semantics. Synthetic UIA
+ranges verify 256-character limits, selection preservation, protected/changed
+target refusal, IPC timeout cleanup, malformed response bounds and actual output
+preparation. Settings persist the selected mode with Auto as the missing-key
+default. Pixel tests and a rendered contact sheet verify that decision labels
+fit inside the fixed cursor surface. Rewrite comparison receives the formatted
+output and a raw alternative prepared using the same insertion plan.
+
+Final verification: 503 tests passed in 34.27 seconds. Ruff lint and format pass
+for 75 Python files. Initial focused tests had two expected schema/menu assertion
+failures; expectations now include the new preference and choices. Updated
+integration subset: 186 passed in 1.93 seconds; final insertion subset: 26 passed
+in 1.06 seconds. No live user text, actual clipboard, desktop automation, API
+calls or running-app restart were used for this feature. Native editor acceptance
+still needs ordinary user testing after tray Restart. Rendering fixture is
+`logs/insertion-feedback-preview.png` (ignored runtime output).
+
 ## Bullet Feedback (2026-10-15)
 
 Font-independent pixel tests cover all three dots, opacity, mode crossfade and

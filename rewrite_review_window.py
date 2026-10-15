@@ -378,7 +378,10 @@ def main():
                 if command in ("capture", "dismiss", "show") and popup is not None:
                     popup.close()
                     popup = None
-                if command == "capture":
+                if command == "context":
+                    context = backend.caret_context(message.get("target"))
+                    print(json.dumps({"id": message["id"], "context": context}), flush=True)
+                elif command == "capture":
                     captured = message["id"]
                     ok = backend.capture(message.get("target"))
                     print(json.dumps({"id": captured, "ready": ok}), flush=True)

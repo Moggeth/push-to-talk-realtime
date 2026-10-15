@@ -644,6 +644,9 @@ def render_indicator_image(
                 draw.ellipse((dx - dr, dy - dr, dx + dr, dy + dr), fill=fill)
     if label:
         font = indicator_label_font(scale)
+        # Temporary insertion decisions must fit the fixed cursor surface.
+        while font.size > 1 and font.getlength(label) > render_size - 8 * scale:
+            font = ImageFont.load_default(size=max(1, font.size - 1))
         draw.text(
             (center, render_size - (12 if bullet_mode else 5) * scale),
             label,

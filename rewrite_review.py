@@ -38,6 +38,7 @@ class RewriteReviewManager:
         self.lock = threading.Lock()
         self.outgoing = queue.Queue(maxsize=8)
         self.pending = {}
+        self.responses = {}
         self.sequence = 0
 
     def start(self):
@@ -109,8 +110,9 @@ class RewriteReviewManager:
                     waiter = (
                         self.pending.get(response.get("id")) if self.process is process else None
                     )
-                if waiter is not None:
-                    waiter.set()
+                    if waiter is not None:
+                        self.responses[response["id"]] = response
+                        waiter.set()
         except (OSError, ValueError):
             self.log("[Review] helper_response_failed")
         finally:
@@ -155,12 +157,47 @@ class RewriteReviewManager:
         ready = sent and waiter.wait(0.25)
         with self.lock:
             self.pending.pop(token, None)
+            self.responses.pop(token, None)
             ready = ready and self.process is process
         if not ready:
             self.log("[Review] capture_timeout")
             self.close(wait=False, expected_process=process)
             return None
         return token
+
+    def caret_context(self, target):
+        if target is None or not self.start():
+            return None
+        with self.lock:
+            process = self.process
+            if process is None:
+                return None
+            self.sequence += 1
+            token = self.sequence
+            waiter = self.pending[token] = threading.Event()
+        sent = self._send(
+            {"command": "context", "id": token, "target": asdict(target)},
+            expected_process=process,
+        )
+        ready = sent and waiter.wait(0.25)
+        with self.lock:
+            self.pending.pop(token, None)
+            response = self.responses.pop(token, {})
+            ready = ready and self.process is process
+        if not ready:
+            self.close(wait=False, expected_process=process)
+            return None
+        context = response.get("context")
+        if not isinstance(context, dict):
+            return None
+        from insertion_formatting import CaretContext
+
+        before, after = context.get("before"), context.get("after")
+        if not isinstance(before, str) or not isinstance(after, str):
+            return None
+        if len(before) > 256 or len(after) > 256:
+            return None
+        return CaretContext(before, after)
 
     def show(self, raw, processed, token=None, pasted=False):
         if not raw.strip() or raw == processed or not self.start():
