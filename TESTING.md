@@ -1,5 +1,25 @@
 # Testing (Plain Language)
 
+## Four Exact Insertion Regressions (2026-10-16)
+
+Five exact-example tests (including straight/curly apostrophes) were run before
+the fix and all failed, reproducing the four reported review findings. They now
+assert complete sentences, not just output invariants:
+
+- Selecting ` good ` in `A good result.` and dictating `Better.` produces
+  `A better result.` through the synthetic native reader and formatter.
+- A selected lowercase word replaced by `Don't.` in `We ... continue.` produces
+  `We don't continue.`; the curly apostrophe variant behaves identically.
+- `We met Dr. | yesterday.` plus `Smith.` produces `We met Dr. Smith yesterday.`.
+- `Examples include |, followed by more.` plus `API, e.g.` produces
+  `Examples include API, e.g., followed by more.`.
+
+Additional guards cover independent leading/trailing separator restoration,
+strict IPC booleans, titles, pronoun-I contractions/acronyms, genuine sentence
+boundaries, ordinary duplicate full stops, abbreviations, dotted initials and
+ellipses. Full verification: 610 passed in 34.46 seconds; Ruff lint/format pass
+for 76 Python files. No live editor input, clipboard writes or app restart.
+
 ## Editor Scope Compatibility and Phrase Replacement (2026-10-16)
 
 Runtime decision events confirmed context_status=unscoped and fallback to

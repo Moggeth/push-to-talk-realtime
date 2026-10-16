@@ -85,6 +85,7 @@ NUMBERS = {
 BOOLEANS = {
     "selected_lowercase_word",
     "selected_trailing_space",
+    "selected_leading_space",
     "terminal_enabled",
     "selection_active",
     "editor_empty",

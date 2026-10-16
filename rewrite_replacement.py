@@ -153,6 +153,9 @@ class WindowsTextReplacement:
             selected_trailing_space = bool(
                 selected and len(selected) <= 256 and selected[-1].isspace()
             )
+            selected_leading_space = bool(
+                selected and len(selected) <= 256 and selected[0].isspace()
+            )
             current_target, current_id, _, current_selection = self._focused()
             if (
                 current_target != target
@@ -168,12 +171,14 @@ class WindowsTextReplacement:
                 editor_empty=not document.GetText(1),
                 selected_lowercase_word=selected_lowercase_word,
                 selected_trailing_space=selected_trailing_space,
+                selected_leading_space=selected_leading_space,
             )
             return {
                 "before": before_text,
                 "after": after_text,
                 "selected_lowercase_word": selected_lowercase_word,
                 "selected_trailing_space": selected_trailing_space,
+                "selected_leading_space": selected_leading_space,
             }
         except Exception:
             self.context_diagnostics["context_status"] = "provider_error"

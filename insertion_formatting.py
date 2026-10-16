@@ -6,6 +6,10 @@ import re
 from dataclasses import dataclass
 
 INSERTION_MODES = ("auto", "standalone", "insert")
+ABBREVIATIONS = frozenset(
+    {"etc.", "e.g.", "i.e.", "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "st.", "vs."}
+)
+CONTINUING_ABBREVIATIONS = ABBREVIATIONS - {"etc."}
 
 # Empty rich-text paragraphs may contain caret anchors or object placeholders.
 _EDITOR_ANCHORS = str.maketrans(
@@ -52,6 +56,31 @@ def initial_case(text: str) -> str:
     if not text:
         return "empty"
     return "upper" if text[0].isupper() else ("lower" if text[0].islower() else "other")
+
+
+def last_word(text: str) -> str:
+    words = text.split()
+    return words[-1].rstrip('"\u201d\u2019)]}') if words else ""
+
+
+def protected_terminal(text: str) -> bool:
+    word = last_word(text)
+    return (
+        text.endswith("..")
+        or word.lower() in ABBREVIATIONS
+        or bool(word != "I." and re.fullmatch(r"(?:[A-Za-z]\.)+", word))
+    )
+
+
+def capitalized_word(word: str) -> bool:
+    normalized = word.replace("\u2019", "'")
+    return bool(
+        normalized
+        and normalized != "I"
+        and not normalized.startswith("I'")
+        and normalized[0].isupper()
+        and normalized[1:].islower()
+    )
 
 
 # Only unambiguous common opening words are lowered. Unknown words may be names.
@@ -197,6 +226,7 @@ class CaretContext:
     after: str
     selected_lowercase_word: bool = False
     selected_trailing_space: bool = False
+    selected_leading_space: bool = False
 
 
 @dataclass(frozen=True)
@@ -221,6 +251,8 @@ def choose_plan(mode: str, context: CaretContext | None, *, bullet=False) -> Ins
     line = visible_context(context.before).rsplit("\n", 1)[-1].rstrip()
     start = not line or bool(re.search(r"[.!?][\"\u201d\u2019)\]]*$", line))
     start = start or bool(re.fullmatch(r"[\s(\[{\"\u201c\u2018]*|(?:[-*\u2022]|\d+[.)])\s*", line))
+    if last_word(line).lower() in CONTINUING_ABBREVIATIONS:
+        start = False
     return InsertionPlan(
         "standalone" if start else "insert",
         "Auto: standalone" if start else "Auto: insert",
@@ -249,11 +281,8 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
         # At the end of existing text, keep punctuation to finish the sentence.
         if continuation and cleaned.endswith(("!", "?")):
             cleaned = cleaned.rstrip("!?")
-        elif continuation and cleaned.endswith(".") and not cleaned.endswith(".."):
-            word = cleaned.split()[-1]
-            abbreviation = word.lower() in {"etc.", "e.g.", "i.e.", "mr.", "mrs.", "dr.", "vs."}
-            if not abbreviation and (word == "I." or not re.fullmatch(r"(?:[A-Za-z]\.)+", word)):
-                cleaned = cleaned[:-1]
+        elif continuation and cleaned.endswith(".") and not protected_terminal(cleaned):
+            cleaned = cleaned[:-1]
         match = re.match(r"([A-Za-z]+)(.*)", cleaned, re.DOTALL)
         replacement_start = re.match(r"([^\W\d_]+(?:['\u2019-][^\W\d_]+)*)(.*)", cleaned, re.DOTALL)
         if match and match[1].istitle() and match[1].lower() in COMMON_OPENERS:
@@ -262,8 +291,7 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
             plan.context is not None
             and plan.context.selected_lowercase_word
             and replacement_start is not None
-            and replacement_start[1] != "I"
-            and replacement_start[1].istitle()
+            and capitalized_word(replacement_start[1])
         ):
             # Replacing an explicitly lowercase word supplies a stronger case
             # signal than a provider's default sentence-initial capitalization.
@@ -273,7 +301,11 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
         return cleaned if plan.style == "insert" else standalone
     before, after = visible_context(context.before), visible_context(context.after)
     # Avoid duplicate punctuation at a splice, including standalone inserts.
-    if after[:1] in (".", "!", "?", ",", ";", ":") and cleaned.endswith(tuple(".!?,;:")):
+    if (
+        after[:1] in (".", "!", "?", ",", ";", ":")
+        and cleaned.endswith(tuple(".!?,;:"))
+        and not protected_terminal(cleaned)
+    ):
         cleaned = cleaned.rstrip(".!?,;:")
     leading = ""
     trailing = ""
@@ -281,7 +313,7 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
     if (
         (
             before
-            and not word_splice
+            and (not word_splice or context.selected_leading_space)
             and not before[-1].isspace()
             and before[-1] not in '([{"\u201c\u2018/\u2014-'
         )
@@ -291,7 +323,7 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
         leading = " "
     if after:
         if (
-            not word_splice
+            (not word_splice or context.selected_trailing_space)
             and not after[0].isspace()
             and after[0] not in ',.;:!?)]}"\u201d\u2019/\u2014-'
         ):

@@ -1495,6 +1495,7 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
                     "editor_empty",
                     "selected_lowercase_word",
                     "selected_trailing_space",
+                    "selected_leading_space",
                 )
                 if key in context_metadata
             }

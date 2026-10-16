@@ -208,10 +208,11 @@ class RewriteReviewManager:
             return None
         lower = context.get("selected_lowercase_word", False)
         trailing = context.get("selected_trailing_space", False)
-        if type(lower) is not bool or type(trailing) is not bool:
+        leading = context.get("selected_leading_space", False)
+        if any(type(flag) is not bool for flag in (lower, trailing, leading)):
             self.context_diagnostics = {"context_status": "invalid_response"}
             return None
-        return CaretContext(before, after, lower, trailing)
+        return CaretContext(before, after, lower, trailing, leading)
 
     def show(self, raw, processed, token=None, pasted=False):
         if not raw.strip() or raw == processed or not self.start():

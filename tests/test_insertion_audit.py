@@ -120,6 +120,7 @@ def test_blank_editor_cannot_read_enclosing_page_text(scoped_backend):
         "after": "",
         "selected_lowercase_word": False,
         "selected_trailing_space": False,
+        "selected_leading_space": False,
     }
     assert backend.context_diagnostics["editor_empty"]
     assert document.selection.start == document.start
@@ -268,6 +269,85 @@ def test_selected_word_at_sentence_start_keeps_capitalization():
 def test_unselected_unknown_word_keeps_conservative_case():
     context = CaretContext("Use ", " now")
     assert format_insertion("Python.", choose_plan("auto", context), "Python. ") == "Python"
+
+
+def test_exact_selected_spaces_regression(scoped_backend):
+    backend, document, target, _ = scoped_backend
+    from tests.test_rewrite_review import Range
+
+    document.text = "A good result."
+    document.start, document.end = 0, len(document.text)
+    document.selection = Range(document, 1, 7)  # Select both separators: ` good `.
+    context = CaretContext(**backend.caret_context(asdict(target)))
+    inserted = format_insertion("Better.", choose_plan("auto", context), "Better. ")
+    assert context.before + inserted + context.after == "A better result."
+
+
+@pytest.mark.parametrize("replacement", ["Don't.", "Don\u2019t."])
+def test_exact_contraction_regression(replacement):
+    context = CaretContext("We ", " continue.", True, True)
+    inserted = format_insertion(replacement, choose_plan("auto", context), replacement + " ")
+    assert (
+        context.before + inserted + context.after == "We " + replacement[:-1].lower() + " continue."
+    )
+
+
+def test_exact_doctor_abbreviation_regression():
+    context = CaretContext("We met Dr. ", " yesterday.")
+    inserted = format_insertion("Smith.", choose_plan("auto", context), "Smith. ")
+    assert context.before + inserted + context.after == "We met Dr. Smith yesterday."
+
+
+def test_exact_abbreviation_before_comma_regression():
+    context = CaretContext("Examples include ", ", followed by more.")
+    inserted = format_insertion("API, e.g.", choose_plan("auto", context), "API, e.g. ")
+    assert (
+        context.before + inserted + context.after == "Examples include API, e.g., followed by more."
+    )
+
+
+@pytest.mark.parametrize("title", ["Dr.", "Mr.", "Mrs.", "Prof."])
+def test_titles_do_not_create_a_sentence_boundary(title):
+    context = CaretContext(f"We met {title} ", " yesterday.")
+    result = format_insertion("Smith.", choose_plan("auto", context), "Smith. ")
+    assert context.before + result + context.after == f"We met {title} Smith yesterday."
+
+
+@pytest.mark.parametrize("word", ["I", "I'm", "I\u2019m", "I've", "I'll", "GPT", "API"])
+def test_contraction_fix_preserves_pronoun_and_acronyms(word):
+    context = CaretContext("Use ", " next.", True, True)
+    result = format_insertion(word + " ready.", choose_plan("auto", context), word + " ready. ")
+    assert result == word + " ready"
+
+
+@pytest.mark.parametrize("ending", ["e.g.", "i.e.", "etc.", "U.S.", "..."])
+def test_adjacent_comma_preserves_meaningful_periods(ending):
+    context = CaretContext("Examples include ", ", followed by more.")
+    text = "API, " + ending
+    result = format_insertion(text, choose_plan("auto", context), text + " ")
+    assert result == text
+
+
+def test_real_sentence_end_and_duplicate_period_still_work():
+    context = CaretContext("Finished. ", "")
+    assert choose_plan("auto", context).style == "standalone"
+    context = CaretContext("Use ", ".")
+    assert format_insertion("Python.", choose_plan("auto", context), "Python. ") == "Python"
+
+
+@pytest.mark.parametrize(
+    "leading,trailing,expected",
+    [
+        (False, False, "Abetterresult."),
+        (True, False, "A betterresult."),
+        (False, True, "Abetter result."),
+        (True, True, "A better result."),
+    ],
+)
+def test_each_selected_separator_is_restored_independently(leading, trailing, expected):
+    context = CaretContext("A", "result.", True, trailing, leading)
+    result = format_insertion("Better.", choose_plan("auto", context), "Better. ")
+    assert context.before + result + context.after == expected
 
 
 def test_multiword_selection_does_not_supply_single_word_case(scoped_backend):

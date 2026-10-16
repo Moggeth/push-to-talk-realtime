@@ -100,6 +100,7 @@ def test_native_context_only_reads_adjacent_ranges(monkeypatch, target):
         "after": "b" * 256,
         "selected_lowercase_word": True,
         "selected_trailing_space": False,
+        "selected_leading_space": False,
     }
     assert document.selection.start == 400
     assert document.selection.end == 408
@@ -138,6 +139,11 @@ def test_context_response_is_bounded_and_validated(monkeypatch, target):
     assert manager.caret_context(target) == CaretContext("a ", " b")
     context.update(selected_lowercase_word=True, selected_trailing_space=True)
     assert manager.caret_context(target) == CaretContext("a ", " b", True, True)
+    context["selected_leading_space"] = True
+    assert manager.caret_context(target) == CaretContext("a ", " b", True, True, True)
+    context["selected_leading_space"] = "invalid"
+    assert manager.caret_context(target) is None
+    context["selected_leading_space"] = True
     context["selected_lowercase_word"] = "invalid"
     assert manager.caret_context(target) is None
     context["selected_lowercase_word"] = True
