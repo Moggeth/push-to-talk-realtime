@@ -1,5 +1,31 @@
 # Testing (Plain Language)
 
+## Insertion Scope and Decision Audit (2026-10-16)
+
+`tests/test_insertion_audit.py` adds 45 blank-paragraph combinations, sentence and
+opening-boundary examples, and a 1,890-case matrix over modes, preceding/following
+context, suffix settings and transcript types. Synthetic provider tests reproduce
+range expansion into text outside a blank editor and verify scope clamping,
+page-wide pattern refusal, read-only/document editability checks, moved selection
+rejection and outside-editor selection refusal. Existing integration tests also
+assert real decision/output diagnostic calls. Logger tests verify durable matching
+IDs while rejecting synthetic surrounding text and titles.
+
+Full suite: 568 passed in 32.94 seconds. After the final diagnostic case-category
+addition, 107 insertion/diagnostic tests passed in 5.95 seconds. Ruff lint and
+format checks pass. The synthetic matrix is a finite boundary audit, not proof
+of all possible grammar or native accessibility-provider behavior. No live editor
+text reads, clipboard writes, pointer control or app restart were used.
+
+For a recurrence, inspect structured `insertion_decision` and `insertion_output`
+events by `run_id` + `insertion_id` in the rotated app.events.jsonl files. They
+include context_status (ok, unscoped, not_editable, outside_editor, caret_changed,
+timeout, etc.), numeric control type, character counts, blank/boundary categories,
+input/output case categories and transformation flags. These separate provider
+context errors from formatting decisions and a lowercase input transcription.
+The previous legacy `[Insertion]` log used a sanitizing sink and discarded these
+details; it cannot retrospectively explain the user's prior examples.
+
 ## Auto Terminal Punctuation (2026-10-16)
 
 Regression cases reproduce visually empty UIA context containing zero-width

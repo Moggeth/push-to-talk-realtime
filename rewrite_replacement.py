@@ -71,29 +71,77 @@ class WindowsTextReplacement:
 
     def caret_context(self, expected_target):
         """Read bounded adjacent text; never select, copy, or read passwords."""
+        self.context_diagnostics = {"context_status": "unavailable"}
         if self.automation is None or not expected_target:
             return None
         try:
             from dataclasses import asdict
 
-            target, _, _, selection = self._focused()
+            target, runtime_id, pattern, selection = self._focused()
             if target is None or asdict(target) != expected_target:
+                self.context_diagnostics["context_status"] = "target_changed"
+                return None
+            element = self.automation.GetFocusedElement()
+            control_type = int(element.CurrentControlType)
+            self.context_diagnostics["control_type"] = control_type
+            if tuple(element.GetRuntimeId()) != runtime_id:
+                self.context_diagnostics["context_status"] = "target_changed"
+                return None
+            document = pattern.DocumentRange.Clone()
+            editable = control_type == 50004
+            try:
+                value = element.GetCurrentPattern(10002).QueryInterface(
+                    self.uia.IUIAutomationValuePattern
+                )
+                editable = not bool(value.CurrentIsReadOnly)
+            except Exception:
+                if control_type == 50030:
+                    editable = bool(element.GetCurrentPropertyValue(30149))
+            if not editable:
+                self.context_diagnostics["context_status"] = "not_editable"
+                return None
+            # Some providers expose a page-wide pattern for an editable child.
+            # Never infer the child's context from the surrounding page.
+            if tuple(document.GetEnclosingElement().GetRuntimeId()) != runtime_id:
+                self.context_diagnostics["context_status"] = "unscoped"
+                return None
+            if (
+                selection.CompareEndpoints(0, document, 0) < 0
+                or selection.CompareEndpoints(1, document, 1) > 0
+            ):
+                self.context_diagnostics["context_status"] = "outside_editor"
                 return None
             before = selection.Clone()
             before.MoveEndpointByRange(1, selection, 0)
             before.MoveEndpointByUnit(0, 0, -256)
+            if before.CompareEndpoints(0, document, 0) < 0:
+                before.MoveEndpointByRange(0, document, 0)
             after = selection.Clone()
             after.MoveEndpointByRange(0, selection, 1)
             after.MoveEndpointByUnit(1, 0, 256)
-            from platform_input import capture_paste_target
-
-            if capture_paste_target() != target:
+            if after.CompareEndpoints(1, document, 1) > 0:
+                after.MoveEndpointByRange(1, document, 1)
+            before_text, after_text = canonical(before.GetText(256)), canonical(after.GetText(256))
+            current_target, current_id, _, current_selection = self._focused()
+            if (
+                current_target != target
+                or current_id != runtime_id
+                or selection.CompareEndpoints(0, current_selection, 0) != 0
+                or selection.CompareEndpoints(1, current_selection, 1) != 0
+            ):
+                self.context_diagnostics["context_status"] = "caret_changed"
                 return None
+            self.context_diagnostics.update(
+                context_status="ok",
+                selection_active=selection.CompareEndpoints(0, selection, 1) != 0,
+                editor_empty=not document.GetText(1),
+            )
             return {
-                "before": canonical(before.GetText(256)),
-                "after": canonical(after.GetText(256)),
+                "before": before_text,
+                "after": after_text,
             }
         except Exception:
+            self.context_diagnostics["context_status"] = "provider_error"
             return None
 
     def attach(self, processed):

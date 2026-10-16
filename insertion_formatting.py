@@ -8,11 +8,50 @@ from dataclasses import dataclass
 INSERTION_MODES = ("auto", "standalone", "insert")
 
 # Empty rich-text paragraphs may contain caret anchors or object placeholders.
-_EDITOR_ANCHORS = str.maketrans("", "", "\u200b\u2060\ufeff\ufffc")
+_EDITOR_ANCHORS = str.maketrans(
+    "",
+    "",
+    "\u200b\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2060\u2066\u2067\u2068\u2069\ufeff\ufffc",
+)
 
 
 def visible_context(text: str) -> str:
-    return text.translate(_EDITOR_ANCHORS)
+    return (
+        text.translate(_EDITOR_ANCHORS)
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\u2028", "\n")
+        .replace("\u2029", "\n")
+    )
+
+
+def boundary_kind(text: str, *, before: bool) -> str:
+    text = visible_context(text)
+    if not text:
+        return "empty"
+    char = text[-1] if before else text[0]
+    if char == "\n":
+        return "newline"
+    if char.isspace():
+        return "space"
+    if char in ".!?":
+        return "sentence"
+    if char in "([{":
+        return "opening"
+    if char in ')]}"\u201d\u2019':
+        return "closing"
+    if char.isalnum():
+        return "word"
+    if char in ",;:/-":
+        return "punctuation"
+    return "other"
+
+
+def initial_case(text: str) -> str:
+    text = text.lstrip()
+    if not text:
+        return "empty"
+    return "upper" if text[0].isupper() else ("lower" if text[0].islower() else "other")
 
 
 # Only unambiguous common opening words are lowered. Unknown words may be names.
@@ -164,25 +203,28 @@ class InsertionPlan:
     label: str
     context: CaretContext | None = None
     trim_terminal: bool = True
+    reason: str = "explicit"
 
 
 def choose_plan(mode: str, context: CaretContext | None, *, bullet=False) -> InsertionPlan:
     if bullet:
-        return InsertionPlan("standalone", "Bullets")
+        return InsertionPlan("standalone", "Bullets", reason="bullet")
     if mode == "standalone":
         return InsertionPlan("standalone", "Standalone")
     if mode == "insert":
         return InsertionPlan("insert", "Insert", context)
     if context is None:
-        return InsertionPlan("standalone", "Auto: unavailable")
+        return InsertionPlan("standalone", "Auto: unavailable", reason="no_context")
     # A newline is a paragraph boundary even after trailing indentation.
     line = visible_context(context.before).rsplit("\n", 1)[-1].rstrip()
     start = not line or bool(re.search(r"[.!?][\"\u201d\u2019)\]]*$", line))
+    start = start or bool(re.fullmatch(r"[\s(\[{\"\u201c\u2018]*|(?:[-*\u2022]|\d+[.)])\s*", line))
     return InsertionPlan(
         "standalone" if start else "insert",
         "Auto: standalone" if start else "Auto: insert",
         context,
-        trim_terminal=bool(visible_context(context.after).strip()),
+        trim_terminal=bool(visible_context(context.after).split("\n", 1)[0].strip()),
+        reason="empty_paragraph" if not line else ("boundary" if start else "continuation"),
     )
 
 

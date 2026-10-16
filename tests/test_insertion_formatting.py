@@ -89,7 +89,9 @@ def test_native_context_only_reads_adjacent_ranges(monkeypatch, target):
     document.text = "a" * 400 + "selected" + "b" * 400
     document.selection = Range(document, 400, 408)
     backend = WindowsTextReplacement.__new__(WindowsTextReplacement)
-    backend.automation = object()
+    element = SimpleNamespace(CurrentControlType=50004, GetRuntimeId=lambda: (1,))
+    backend.automation = SimpleNamespace(GetFocusedElement=lambda: element)
+    monkeypatch.setattr(Range, "GetEnclosingElement", lambda self: element, raising=False)
     backend._focused = lambda: (target, (1,), document, document.selection.Clone())
     monkeypatch.setattr("platform_input.capture_paste_target", lambda: target)
     result = backend.caret_context(asdict(target))
@@ -97,6 +99,7 @@ def test_native_context_only_reads_adjacent_ranges(monkeypatch, target):
     assert document.selection.start == 400
     assert document.selection.end == 408
     monkeypatch.setattr("platform_input.capture_paste_target", lambda: None)
+    backend._focused = lambda: (None, (1,), document, document.selection.Clone())
     assert backend.caret_context(asdict(target)) is None
     backend._focused = Mock(side_effect=ValueError("protected_control"))
     assert backend.caret_context(asdict(target)) is None
@@ -144,12 +147,21 @@ def test_paste_uses_local_context_and_visual_feedback(monkeypatch, target):
     context = CaretContext("I think ", " it works")
     manager = SimpleNamespace(caret_context=Mock(return_value=context))
     monkeypatch.setattr(app, "rewrite_review_manager", manager)
+    diagnostics = Mock()
+    monkeypatch.setattr(app, "APP_DIAGNOSTICS", diagnostics)
     monkeypatch.setattr(app, "capture_paste_target", lambda: target)
     copy = Mock()
     monkeypatch.setattr(app.pyperclip, "copy", copy)
     monkeypatch.setattr(app, "try_insert_text_into_target", Mock(return_value=True))
     assert app._paste_text_unlocked("That.", target)
     copy.assert_called_once_with("that")
+    decision = diagnostics.emit.call_args_list[0]
+    assert decision.args == ("insertion_decision",)
+    assert decision.kwargs["insertion_reason"] == "continuation"
+    assert decision.kwargs["lowered_initial"]
+    assert decision.kwargs["removed_terminal"]
+    assert decision.kwargs["context_status"] == "ok"
+    assert diagnostics.emit.call_args_list[-1].kwargs["insertion_outcome"] == "direct"
     assert app.cursor_indicator_snapshot().label == "Auto: insert"
     app.state.insertion_feedback_at -= 3
     assert not app.cursor_indicator_snapshot().label

@@ -32,7 +32,15 @@ from usage_tracking import UsageMeter, UsageStore, usage_path
 from transcription_progress import TimingEstimator
 from mouse_gestures import GestureMonitor
 from rich_clipboard import add_bullet_html
-from insertion_formatting import INSERTION_MODES, InsertionPlan, choose_plan, format_insertion
+from insertion_formatting import (
+    INSERTION_MODES,
+    InsertionPlan,
+    boundary_kind,
+    choose_plan,
+    format_insertion,
+    initial_case,
+    visible_context,
+)
 from swiftpoint_haptics import BulletHaptics
 from rewrite_review import RewriteReviewManager
 from output_transaction import output_transaction
@@ -505,6 +513,7 @@ class SessionState:
     indicator_terminals: deque = field(default_factory=lambda: deque(maxlen=16))
     paste_suffix_mode: str = DEFAULT_SUFFIX_MODE
     insertion_mode: str = "auto"
+    insertion_sequence: int = 0
     insertion_feedback: str = ""
     insertion_feedback_at: float = 0.0
     last_output_preparation: tuple[str, InsertionPlan] | None = None
@@ -1463,62 +1472,113 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
     prepared = prepare_clipboard_text(text, bullet_mode=bullet_mode)
     with state.lock:
         insertion_mode = state.insertion_mode
+        terminal_enabled = state.punctuation_terminal
+        state.insertion_sequence += 1
+        insertion_id = state.insertion_sequence
         state.last_output_preparation = None
     context = None
+    context_started = time.perf_counter()
+    context_metadata = {"context_status": "not_requested"}
     if not bullet_mode and insertion_mode != "standalone" and rewrite_review_manager is not None:
         try:
             context = rewrite_review_manager.caret_context(target)
+            context_metadata = getattr(rewrite_review_manager, "context_diagnostics", {})
+            if not isinstance(context_metadata, dict):
+                context_metadata = {}
+            context_metadata = {
+                key: context_metadata[key]
+                for key in ("context_status", "control_type", "selection_active", "editor_empty")
+                if key in context_metadata
+            }
+            context_metadata.setdefault("context_status", "ok" if context else "unavailable")
         except Exception:
+            context_metadata = {"context_status": "provider_error"}
             log("[Insertion] Local context unavailable")
+    elif not bullet_mode and insertion_mode != "standalone":
+        context_metadata = {"context_status": "unavailable"}
     plan = choose_plan(insertion_mode, context, bullet=bullet_mode)
+    standalone = prepared
     if not bullet_mode:
         prepared = format_insertion(text, plan, prepared)
+    APP_DIAGNOSTICS.emit(
+        "insertion_decision",
+        **context_metadata,
+        insertion_id=insertion_id,
+        insertion_mode=insertion_mode,
+        insertion_style=plan.style,
+        insertion_reason=plan.reason,
+        bullet_mode=bullet_mode,
+        context_ms=round((time.perf_counter() - context_started) * 1000, 2),
+        before_length=len(context.before) if context else 0,
+        after_length=len(context.after) if context else 0,
+        before_empty=not context or not visible_context(context.before).strip(),
+        after_empty=not context or not visible_context(context.after).strip(),
+        before_boundary=boundary_kind(context.before, before=True) if context else "empty",
+        after_boundary=boundary_kind(context.after, before=False) if context else "empty",
+        added_leading_space=prepared.startswith(" ") and not standalone.startswith(" "),
+        added_trailing_space=prepared.endswith(" "),
+        lowered_initial=bool(initial_case(text) == "upper" and initial_case(prepared) == "lower"),
+        input_initial=initial_case(text),
+        output_initial=initial_case(prepared),
+        terminal_enabled=terminal_enabled,
+        removed_terminal=bool(
+            standalone.rstrip().endswith(tuple(".!?"))
+            and not prepared.rstrip().endswith(tuple(".!?"))
+        ),
+    )
+
+    def finish(ok, outcome):
+        APP_DIAGNOSTICS.emit(
+            "insertion_output", insertion_id=insertion_id, insertion_outcome=outcome
+        )
+        return ok
+
     with state.lock:
         state.last_output_preparation = (prepared, plan)
     # Only the decision is logged. Adjacent editor text stays in memory locally.
     log("[Insertion]", plan.label)
     if not prepared or not prepared.strip():
-        return False
+        return finish(False, "empty")
     if shutdown_event.is_set():
-        return False
+        return finish(False, "shutdown")
     pyperclip.copy(prepared)
     if context is not None and capture_paste_target() != target:
         log("[Insertion] Focus changed; transcript left on clipboard")
-        return False
+        return finish(False, "focus_changed")
     rich_bullet = bullet_mode and add_bullet_html(prepared)
     if bullet_mode:
         APP_DIAGNOSTICS.emit("bullet_output", rich_clipboard=bool(rich_bullet))
         if pyperclip.paste() != prepared:
             log("[Paste] Clipboard changed during bullet preparation; paste skipped.")
-            return False
+            return finish(False, "clipboard_changed")
     # Direct text insertion bypasses the editor's rich-paste handler.
     if not rich_bullet and target is not None and try_insert_text_into_target(prepared, target):
         show_insertion_feedback(plan.label)
         log("[Pasted] Inserted transcript into remembered target.")
-        return True
+        return finish(True, "direct")
     if target is not None and IS_WINDOWS and not foreground_matches_paste_target(target):
         log(
             "[Paste] Remembered target unavailable and foreground changed; skipped active-window paste."
         )
         log("[Paste] Clipboard still contains the transcript.")
-        return False
+        return finish(False, "focus_changed")
     time.sleep(0.02)
     if shutdown_event.is_set():
-        return False
+        return finish(False, "shutdown")
     if context is not None and capture_paste_target() != target:
         log("[Insertion] Focus changed before paste; transcript left on clipboard")
-        return False
+        return finish(False, "focus_changed")
     try:
         if bullet_mode and pyperclip.paste() != prepared:
             log("[Paste] Clipboard changed before bullet paste; output skipped.")
-            return False
+            return finish(False, "clipboard_changed")
         send_paste_shortcut()
     except Exception as exc:  # pylint: disable=broad-except
         log("[Paste error]", exc)
         log("[Paste error] Clipboard still contains the transcript.")
-        return False
+        return finish(False, "failed")
     show_insertion_feedback(plan.label)
-    return True
+    return finish(True, "shortcut")
 
 
 def show_insertion_feedback(label: str) -> None:

@@ -39,6 +39,7 @@ class RewriteReviewManager:
         self.outgoing = queue.Queue(maxsize=8)
         self.pending = {}
         self.responses = {}
+        self.context_diagnostics = {}
         self.sequence = 0
 
     def start(self):
@@ -166,6 +167,7 @@ class RewriteReviewManager:
         return token
 
     def caret_context(self, target):
+        self.context_diagnostics = {"context_status": "unavailable"}
         if target is None or not self.start():
             return None
         with self.lock:
@@ -185,8 +187,13 @@ class RewriteReviewManager:
             response = self.responses.pop(token, {})
             ready = ready and self.process is process
         if not ready:
+            self.context_diagnostics = {"context_status": "timeout"}
             self.close(wait=False, expected_process=process)
             return None
+        from runtime_diagnostics import safe_fields
+
+        metadata = response.get("context_diagnostics", {})
+        self.context_diagnostics = safe_fields(metadata) if isinstance(metadata, dict) else {}
         context = response.get("context")
         if not isinstance(context, dict):
             return None
@@ -194,8 +201,10 @@ class RewriteReviewManager:
 
         before, after = context.get("before"), context.get("after")
         if not isinstance(before, str) or not isinstance(after, str):
+            self.context_diagnostics = {"context_status": "invalid_response"}
             return None
         if len(before) > 256 or len(after) > 256:
+            self.context_diagnostics = {"context_status": "invalid_response"}
             return None
         return CaretContext(before, after)
 

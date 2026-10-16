@@ -22,6 +22,8 @@ MAX_BYTES = 4 * 1024 * 1024
 BACKUPS = 4
 COMPONENTS = {"app", "launcher", "supervisor", "manager", "task"}
 EVENTS = {
+    "insertion_decision",
+    "insertion_output",
     "bullet_output",
     "bullet_mode_changed",
     "gesture_setting_changed",
@@ -55,6 +57,11 @@ EVENTS = {
     "task_failed",
 }
 NUMBERS = {
+    "insertion_id",
+    "context_ms",
+    "before_length",
+    "after_length",
+    "control_type",
     "error_line",
     "child_pid",
     "previous_pid",
@@ -76,6 +83,15 @@ NUMBERS = {
     "recovery_count",
 }
 BOOLEANS = {
+    "terminal_enabled",
+    "selection_active",
+    "editor_empty",
+    "before_empty",
+    "after_empty",
+    "added_leading_space",
+    "added_trailing_space",
+    "lowered_initial",
+    "removed_terminal",
     "rich_clipboard",
     "bullet_mode",
     "gesture_enabled",
@@ -97,6 +113,62 @@ BOOLEANS = {
     "python_present",
 }
 TOKENS = {
+    "input_initial": {"empty", "upper", "lower", "other"},
+    "output_initial": {"empty", "upper", "lower", "other"},
+    "insertion_reason": {
+        "bullet",
+        "explicit",
+        "no_context",
+        "empty_paragraph",
+        "boundary",
+        "continuation",
+    },
+    "insertion_mode": {"auto", "standalone", "insert"},
+    "insertion_style": {"standalone", "insert"},
+    "context_status": {
+        "ok",
+        "unavailable",
+        "timeout",
+        "unscoped",
+        "outside_editor",
+        "not_editable",
+        "caret_changed",
+        "target_changed",
+        "provider_error",
+        "invalid_response",
+        "not_requested",
+    },
+    "insertion_outcome": {
+        "direct",
+        "shortcut",
+        "focus_changed",
+        "shutdown",
+        "empty",
+        "clipboard_changed",
+        "failed",
+    },
+    "before_boundary": {
+        "empty",
+        "space",
+        "newline",
+        "sentence",
+        "opening",
+        "closing",
+        "word",
+        "punctuation",
+        "other",
+    },
+    "after_boundary": {
+        "empty",
+        "space",
+        "newline",
+        "sentence",
+        "opening",
+        "closing",
+        "word",
+        "punctuation",
+        "other",
+    },
     "launch_source": {"scheduled_task", "package_manager", "manual", "restart", "unknown"},
     "mode": {"foreground", "supervise", "detached"},
     "reason": {
@@ -251,6 +323,10 @@ def source_hash(directory: Path) -> str:
         "process_supervisor.py",
         "push_to_talk_realtime.py",
         "runtime_diagnostics.py",
+        "insertion_formatting.py",
+        "rewrite_replacement.py",
+        "rewrite_review.py",
+        "rewrite_review_window.py",
     ):
         try:
             digest.update(name.encode())

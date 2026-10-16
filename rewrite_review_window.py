@@ -380,7 +380,16 @@ def main():
                     popup = None
                 if command == "context":
                     context = backend.caret_context(message.get("target"))
-                    print(json.dumps({"id": message["id"], "context": context}), flush=True)
+                    print(
+                        json.dumps(
+                            {
+                                "id": message["id"],
+                                "context": context,
+                                "context_diagnostics": backend.context_diagnostics,
+                            }
+                        ),
+                        flush=True,
+                    )
                 elif command == "capture":
                     captured = message["id"]
                     ok = backend.capture(message.get("target"))
