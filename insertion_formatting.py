@@ -236,6 +236,7 @@ class InsertionPlan:
     context: CaretContext | None = None
     trim_terminal: bool = True
     reason: str = "explicit"
+    automatic: bool = False
 
 
 def choose_plan(mode: str, context: CaretContext | None, *, bullet=False) -> InsertionPlan:
@@ -246,7 +247,7 @@ def choose_plan(mode: str, context: CaretContext | None, *, bullet=False) -> Ins
     if mode == "insert":
         return InsertionPlan("insert", "Insert", context)
     if context is None:
-        return InsertionPlan("standalone", "Auto: unavailable", reason="no_context")
+        return InsertionPlan("standalone", "Auto: unavailable", reason="no_context", automatic=True)
     # A newline is a paragraph boundary even after trailing indentation.
     line = visible_context(context.before).rsplit("\n", 1)[-1].rstrip()
     start = not line or bool(re.search(r"[.!?][\"\u201d\u2019)\]]*$", line))
@@ -265,6 +266,7 @@ def choose_plan(mode: str, context: CaretContext | None, *, bullet=False) -> Ins
             if start
             else ("word_replacement" if context.selected_lowercase_word else "continuation")
         ),
+        automatic=True,
     )
 
 
@@ -333,4 +335,12 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
         trailing = standalone[len(standalone.rstrip()) :]
     elif context.selected_trailing_space:
         trailing = " "
+    # Rich editors may expose a virtual final newline. It cannot substitute
+    # for the requested output suffix; retain that suffix for the next
+    # dictation even if its accessibility read later falls back.
+    paragraph_end = not after or (after.startswith("\n") and not after.strip())
+    if paragraph_end and (plan.automatic or plan.style == "standalone"):
+        suffix = standalone[len(standalone.rstrip()) :]
+        if suffix == " " or (suffix == "\n" and not after):
+            trailing = suffix
     return leading + cleaned + trailing

@@ -335,6 +335,35 @@ def test_real_sentence_end_and_duplicate_period_still_work():
     assert format_insertion("Python.", choose_plan("auto", context), "Python. ") == "Python"
 
 
+@pytest.mark.parametrize("first_before", ["", "Existing thought "])
+def test_consecutive_dictations_keep_separator_when_next_context_fails(first_before):
+    first_text = "First sentence."
+    first_context = CaretContext(first_before, "\n")
+    first = format_insertion(first_text, choose_plan("auto", first_context), first_text + " ")
+    second_text = "This is the next sentence."
+    second = format_insertion(second_text, choose_plan("auto", None), second_text + " ")
+    assert first.endswith(". ")
+    expected_first = "First sentence. " if not first_before else "first sentence. "
+    assert first + second == expected_first + second_text + " "
+
+
+def test_auto_end_of_unfinished_field_keeps_configured_space():
+    context = CaretContext("Existing words ", "")
+    assert (
+        format_insertion("That works.", choose_plan("auto", context), "That works. ")
+        == "that works. "
+    )
+
+
+@pytest.mark.parametrize("after", ["", "\n"])
+def test_available_context_repairs_missing_previous_sentence_separator(after):
+    context = CaretContext("First sentence.", after)
+    assert (
+        format_insertion("This is next.", choose_plan("auto", context), "This is next. ")
+        == " This is next. "
+    )
+
+
 @pytest.mark.parametrize(
     "leading,trailing,expected",
     [
@@ -348,6 +377,65 @@ def test_each_selected_separator_is_restored_independently(leading, trailing, ex
     context = CaretContext("A", "result.", True, trailing, leading)
     result = format_insertion("Better.", choose_plan("auto", context), "Better. ")
     assert context.before + result + context.after == expected
+
+
+@pytest.mark.parametrize("after", ["", "\n", "\r\n", "\u2029"])
+@pytest.mark.parametrize("suffix", ["none", "space", "newline"])
+def test_end_of_paragraph_respects_suffix_without_duplicate_newline(after, suffix):
+    context = CaretContext("", after)
+    baseline = prepare_clipboard_text("First sentence.", suffix_mode=suffix)
+    result = format_insertion("First sentence.", choose_plan("auto", context), baseline)
+    expected_suffix = (
+        " " if suffix == "space" else ("\n" if suffix == "newline" and not after else "")
+    )
+    assert result == "First sentence." + expected_suffix
+
+
+def test_explicit_fragment_still_has_no_automatic_suffix():
+    context = CaretContext("Existing ", "\n")
+    assert (
+        format_insertion("That works.", choose_plan("insert", context), "That works. ")
+        == "that works"
+    )
+
+
+def test_two_real_output_preparations_survive_context_fallback(monkeypatch, scoped_backend):
+    import push_to_talk_realtime as app
+
+    _, _, target, _ = scoped_backend
+    monkeypatch.setattr(app, "state", app.SessionState())
+    monkeypatch.setattr(app, "shutdown_event", SimpleNamespace(is_set=lambda: False))
+    monkeypatch.setattr(app, "log", Mock())
+    diagnostics = Mock()
+    monkeypatch.setattr(app, "APP_DIAGNOSTICS", diagnostics)
+    responses = iter([CaretContext("", "\n"), None])
+    manager = SimpleNamespace(context_diagnostics={})
+
+    def context(_):
+        result = next(responses)
+        manager.context_diagnostics = {"context_status": "ok" if result else "outside_editor"}
+        return result
+
+    manager.caret_context = context
+    monkeypatch.setattr(app, "rewrite_review_manager", manager)
+    monkeypatch.setattr(app, "capture_paste_target", lambda: target)
+    monkeypatch.setattr(app, "foreground_matches_paste_target", lambda _: True)
+    monkeypatch.setattr(app, "try_insert_text_into_target", lambda *_: False)
+    monkeypatch.setattr(app.time, "sleep", lambda _: None)
+    clipboard, draft = [""], []
+    monkeypatch.setattr(app.pyperclip, "copy", lambda text: clipboard.__setitem__(0, text))
+    monkeypatch.setattr(app, "send_paste_shortcut", lambda: draft.append(clipboard[0]))
+    assert app._paste_text_unlocked("This is one sentence.", target)
+    assert app._paste_text_unlocked("This is the next sentence.", target)
+    assert "".join(draft) == "This is one sentence. This is the next sentence. "
+    decisions = [
+        call.kwargs
+        for call in diagnostics.emit.call_args_list
+        if call.args == ("insertion_decision",)
+    ]
+    assert decisions[0]["added_trailing_space"]
+    assert decisions[1]["context_status"] == "outside_editor"
+    assert all(decision["suffix_mode"] == "space" for decision in decisions)
 
 
 def test_multiword_selection_does_not_supply_single_word_case(scoped_backend):

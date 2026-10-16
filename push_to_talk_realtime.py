@@ -1473,6 +1473,7 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
     with state.lock:
         insertion_mode = state.insertion_mode
         terminal_enabled = state.punctuation_terminal
+        suffix_mode = state.paste_suffix_mode
         state.insertion_sequence += 1
         insertion_id = state.insertion_sequence
         state.last_output_preparation = None
@@ -1514,6 +1515,7 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
         **context_metadata,
         insertion_id=insertion_id,
         insertion_mode=insertion_mode,
+        suffix_mode=suffix_mode,
         insertion_style=plan.style,
         insertion_reason=plan.reason,
         bullet_mode=bullet_mode,

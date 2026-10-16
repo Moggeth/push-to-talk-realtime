@@ -1,5 +1,24 @@
 # Testing (Plain Language)
 
+## Consecutive Sentence Spacing (2026-10-16)
+
+Runtime events showed a first insertion with before_length=0, after_boundary=newline
+and added_trailing_space=false, followed by outside_editor context fallback.
+The first formatter dropped the configured space because of the editor newline;
+the next fallback could not infer a leading space. No surrounding text was read.
+
+Tests reproduce that sequence both at the string-formatting level and through two
+mocked native-output/clipboard-shortcut preparations, asserting the complete result
+`This is one sentence. This is the next sentence. `. Additional cases cover a
+nonempty unfinished field, healthy context repairing a missing prior separator,
+CR/LF/Unicode paragraph markers, None/Space/Newline suffix choices and explicit
+Insert. Two existing expectations now correctly retain Auto's end-of-field space.
+
+Four of five initial regression cases failed before the fix; one existing leading
+space repair case already passed. Final affected suite: 305 passed in 7.71 seconds.
+Ruff lint and format pass for 76 files. No real clipboard writes, desktop control,
+API requests or app restart were performed. Activate through the usual tray Restart.
+
 ## Four Exact Insertion Regressions (2026-10-16)
 
 Five exact-example tests (including straight/curly apostrophes) were run before
