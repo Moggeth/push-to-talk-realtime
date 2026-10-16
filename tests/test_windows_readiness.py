@@ -208,8 +208,9 @@ def test_real_supervisor_death_adoption_and_child_failure_recovery(tmp_path):
         assert instance_exists(name)  # Child survives losing its supervisor.
         supervisor = launch()
         wait_until(
-            lambda: "Existing app detected"
-            in (tmp_path / "push_to_talk_supervisor.log").read_text()
+            lambda: (
+                "Existing app detected" in (tmp_path / "push_to_talk_supervisor.log").read_text()
+            )
         )
         assert pid_path.read_text() == first_pid
         kill_fixture_child()

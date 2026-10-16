@@ -210,8 +210,9 @@ class HotkeySessionStartTests(unittest.TestCase):
             patch.object(
                 push_to_talk,
                 "archive_raw_transcript",
-                side_effect=lambda **kwargs: archive_events.append(("raw", kwargs["raw_text"]))
-                or 1,
+                side_effect=lambda **kwargs: (
+                    archive_events.append(("raw", kwargs["raw_text"])) or 1
+                ),
             ),
             patch.object(
                 push_to_talk,
@@ -223,8 +224,10 @@ class HotkeySessionStartTests(unittest.TestCase):
             patch.object(
                 push_to_talk,
                 "post_process_transcript",
-                side_effect=lambda text, *_args: archive_events.append(("post", text))
-                or (_ for _ in ()).throw(RuntimeError("temporary API failure")),
+                side_effect=lambda text, *_args: (
+                    archive_events.append(("post", text))
+                    or (_ for _ in ()).throw(RuntimeError("temporary API failure"))
+                ),
             ),
             patch.object(
                 push_to_talk,

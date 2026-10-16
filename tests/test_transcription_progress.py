@@ -108,6 +108,62 @@ def test_persistence_roundtrip_and_bounded_storage(tmp_path):
     assert restored.predict("recorded:model", 30) == 4
 
 
+def test_identical_observations_survive_reload_and_restart(tmp_path, monkeypatch):
+    # Windows clocks can assign multiple real observations the same timestamp.
+    import time
+
+    monkeypatch.setattr(time, "time", lambda: 100 * DAY)
+    path = tmp_path / "timings.db"
+    estimator = TimingEstimator()
+    estimator.start(path)
+    for _ in range(12):
+        estimator.observe("recorded:model", 30, 4)
+    estimator.close()
+    assert not estimator._worker.is_alive()
+    assert len(estimator._samples) == 12
+    estimator.start(path)
+    estimator.close()
+    assert len(estimator._samples) == 12
+    restored = TimingEstimator()
+    restored.start(path)
+    restored.close()
+    assert len(restored._samples) == 12
+    assert restored.predict("recorded:model", 30) == 4
+
+
+def test_observations_during_load_are_not_deduplicated(tmp_path, monkeypatch):
+    import time
+
+    monkeypatch.setattr(time, "time", lambda: 100 * DAY)
+    path = tmp_path / "timings.db"
+    estimator = TimingEstimator()
+    estimator.start(path)
+    for _ in range(8):
+        estimator.observe("m", 10, 2)
+    estimator.close()
+    original = sqlite3.connect
+    entered, release = threading.Event(), threading.Event()
+
+    def connect(*args, **kwargs):
+        entered.set()
+        assert release.wait(3)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    estimator.start(path)
+    try:
+        assert entered.wait(1)
+        for _ in range(4):
+            estimator.observe("m", 10, 2)
+    finally:
+        release.set()
+        estimator.close()
+    assert not estimator._worker.is_alive()
+    assert len(estimator._samples) == 12
+    with original(path) as db:
+        assert db.execute("SELECT COUNT(*) FROM timings").fetchone()[0] == 12
+
+
 def test_corrupt_storage_is_nonfatal(tmp_path, caplog):
     path = tmp_path / "timings.db"
     path.write_bytes(b"not a database")
@@ -154,11 +210,17 @@ def test_timing_worker_closes_database_and_restarts_without_duplicate_history(
 def test_full_queue_does_not_lose_shutdown_signal(tmp_path, monkeypatch):
     original = sqlite3.connect
     entered, release = threading.Event(), threading.Event()
+    commits = []
+
+    class Connection(sqlite3.Connection):
+        def commit(self):
+            commits.append(1)
+            return super().commit()
 
     def connect(*args, **kwargs):
         entered.set()
         assert release.wait(3)
-        return original(*args, **kwargs)
+        return original(*args, factory=Connection, **kwargs)
 
     monkeypatch.setattr(sqlite3, "connect", connect)
     estimator = TimingEstimator()
@@ -173,6 +235,9 @@ def test_full_queue_does_not_lose_shutdown_signal(tmp_path, monkeypatch):
         release.set()
         estimator._worker.join(5)
     assert not estimator._worker.is_alive()
+    assert len(commits) == 2  # schema cleanup, then the full queued batch
+    with original(tmp_path / "timings.db") as db:
+        assert db.execute("SELECT COUNT(*) FROM timings").fetchone()[0] == MAX_SAMPLES
 
 
 def test_timing_thread_start_failure_does_not_escape(monkeypatch, tmp_path):

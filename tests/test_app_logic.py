@@ -2165,8 +2165,9 @@ def test_open_transcript_browser_reuses_server(monkeypatch):
     monkeypatch.setattr(
         app,
         "launch_transcript_browser",
-        lambda store, open_browser: launch_calls.append((store, open_browser))
-        or (fake_server, "http://127.0.0.1:4321/"),
+        lambda store, open_browser: (
+            launch_calls.append((store, open_browser)) or (fake_server, "http://127.0.0.1:4321/")
+        ),
     )
     monkeypatch.setattr(app.webbrowser, "open", opened_urls.append)
 

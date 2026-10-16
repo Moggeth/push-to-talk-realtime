@@ -8,7 +8,7 @@ import queue
 import sqlite3
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,7 +97,11 @@ class TimingEstimator:
                 return
             self._stop.clear()
             self._queue = queue.Queue(maxsize=MAX_SAMPLES)
-            self._worker = threading.Thread(target=self._persist, args=(path,), daemon=True)
+            with self._lock:
+                existing = Counter(self._samples)
+            self._worker = threading.Thread(
+                target=self._persist, args=(path, existing), daemon=True
+            )
             try:
                 self._worker.start()
             except Exception:
@@ -113,7 +117,7 @@ class TimingEstimator:
         if worker is not None and worker.is_alive():
             worker.join(timeout=0.5)
 
-    def _persist(self, path):
+    def _persist(self, path, existing):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with closing(sqlite3.connect(path, timeout=0.2)) as db:
@@ -133,19 +137,31 @@ class TimingEstimator:
                         isinstance(v, (int, float)) and math.isfinite(v) and v > 0
                         for v in (audio, elapsed, at)
                     ):
-                        loaded.append(Sample(key, audio, elapsed, at))
+                        sample = Sample(key, audio, elapsed, at)
+                        # Match only history already in memory at start, preserving
+                        # repeated observations and new samples arriving during load.
+                        if existing[sample]:
+                            existing[sample] -= 1
+                        else:
+                            loaded.append(sample)
                 with self._lock:
-                    self._samples = deque(
-                        dict.fromkeys([*loaded, *self._samples]), maxlen=MAX_SAMPLES
-                    )
+                    self._samples = deque([*loaded, *self._samples], maxlen=MAX_SAMPLES)
                 while not self._stop.is_set() or not self._queue.empty():
                     try:
                         sample = self._queue.get(timeout=0.1)
                     except queue.Empty:
                         continue
-                    db.execute(
+                    batch = [sample]
+                    for _ in range(MAX_SAMPLES - 1):
+                        try:
+                            batch.append(self._queue.get_nowait())
+                        except queue.Empty:
+                            break
+                    # One transaction per bounded batch avoids hundreds of disk
+                    # flushes when draining a full queue during shutdown.
+                    db.executemany(
                         "INSERT INTO timings VALUES (?,?,?,?)",
-                        (sample.key, sample.audio_s, sample.elapsed_s, sample.at),
+                        [(s.key, s.audio_s, s.elapsed_s, s.at) for s in batch],
                     )
                     db.execute(
                         "DELETE FROM timings WHERE at < ? OR rowid NOT IN "

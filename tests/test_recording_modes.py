@@ -97,8 +97,9 @@ def test_raw_archived_before_rewrite_even_when_legacy_log_disabled(
     monkeypatch.setattr(
         app,
         "archive_raw_transcript",
-        lambda **kw: events.append(("raw", kw["raw_text"]))
-        or (None if failure == "archive" else 1),
+        lambda **kw: (
+            events.append(("raw", kw["raw_text"])) or (None if failure == "archive" else 1)
+        ),
     )
     if failure == "instructions":
         monkeypatch.setattr(
