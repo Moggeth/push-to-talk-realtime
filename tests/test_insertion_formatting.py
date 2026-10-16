@@ -95,7 +95,12 @@ def test_native_context_only_reads_adjacent_ranges(monkeypatch, target):
     backend._focused = lambda: (target, (1,), document, document.selection.Clone())
     monkeypatch.setattr("platform_input.capture_paste_target", lambda: target)
     result = backend.caret_context(asdict(target))
-    assert result == {"before": "a" * 256, "after": "b" * 256}
+    assert result == {
+        "before": "a" * 256,
+        "after": "b" * 256,
+        "selected_lowercase_word": True,
+        "selected_trailing_space": False,
+    }
     assert document.selection.start == 400
     assert document.selection.end == 408
     monkeypatch.setattr("platform_input.capture_paste_target", lambda: None)
@@ -131,6 +136,11 @@ def test_context_response_is_bounded_and_validated(monkeypatch, target):
 
     monkeypatch.setattr(manager, "_send", reply)
     assert manager.caret_context(target) == CaretContext("a ", " b")
+    context.update(selected_lowercase_word=True, selected_trailing_space=True)
+    assert manager.caret_context(target) == CaretContext("a ", " b", True, True)
+    context["selected_lowercase_word"] = "invalid"
+    assert manager.caret_context(target) is None
+    context["selected_lowercase_word"] = True
     context["before"] = "a" * 257
     assert manager.caret_context(target) is None
     context["before"] = 4

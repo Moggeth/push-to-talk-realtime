@@ -206,7 +206,12 @@ class RewriteReviewManager:
         if len(before) > 256 or len(after) > 256:
             self.context_diagnostics = {"context_status": "invalid_response"}
             return None
-        return CaretContext(before, after)
+        lower = context.get("selected_lowercase_word", False)
+        trailing = context.get("selected_trailing_space", False)
+        if type(lower) is not bool or type(trailing) is not bool:
+            self.context_diagnostics = {"context_status": "invalid_response"}
+            return None
+        return CaretContext(before, after, lower, trailing)
 
     def show(self, raw, processed, token=None, pasted=False):
         if not raw.strip() or raw == processed or not self.start():

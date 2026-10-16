@@ -195,6 +195,8 @@ COMMON_OPENERS = frozenset(
 class CaretContext:
     before: str
     after: str
+    selected_lowercase_word: bool = False
+    selected_trailing_space: bool = False
 
 
 @dataclass(frozen=True)
@@ -224,7 +226,13 @@ def choose_plan(mode: str, context: CaretContext | None, *, bullet=False) -> Ins
         "Auto: standalone" if start else "Auto: insert",
         context,
         trim_terminal=bool(visible_context(context.after).split("\n", 1)[0].strip()),
-        reason="empty_paragraph" if not line else ("boundary" if start else "continuation"),
+        reason="empty_paragraph"
+        if not line
+        else (
+            "boundary"
+            if start
+            else ("word_replacement" if context.selected_lowercase_word else "continuation")
+        ),
     )
 
 
@@ -244,11 +252,22 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
         elif continuation and cleaned.endswith(".") and not cleaned.endswith(".."):
             word = cleaned.split()[-1]
             abbreviation = word.lower() in {"etc.", "e.g.", "i.e.", "mr.", "mrs.", "dr.", "vs."}
-            if not abbreviation and not re.fullmatch(r"(?:[A-Za-z]\.)+", word):
+            if not abbreviation and (word == "I." or not re.fullmatch(r"(?:[A-Za-z]\.)+", word)):
                 cleaned = cleaned[:-1]
         match = re.match(r"([A-Za-z]+)(.*)", cleaned, re.DOTALL)
+        replacement_word = cleaned.rstrip(".!?")
         if match and match[1].istitle() and match[1].lower() in COMMON_OPENERS:
             cleaned = match[1].lower() + match[2]
+        elif (
+            plan.context is not None
+            and plan.context.selected_lowercase_word
+            and replacement_word != "I"
+            and replacement_word.istitle()
+            and re.fullmatch(r"[^\W\d_]+(?:['\u2019-][^\W\d_]+)*", replacement_word)
+        ):
+            # Replacing an explicitly lowercase word supplies a stronger case
+            # signal than a provider's default sentence-initial capitalization.
+            cleaned = replacement_word.lower() + cleaned[len(replacement_word) :]
     context = plan.context
     if context is None:
         return cleaned if plan.style == "insert" else standalone
@@ -280,4 +299,6 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
     elif plan.style == "standalone":
         # Retain the configured suffix at the end of a paragraph/document.
         trailing = standalone[len(standalone.rstrip()) :]
+    elif context.selected_trailing_space:
+        trailing = " "
     return leading + cleaned + trailing

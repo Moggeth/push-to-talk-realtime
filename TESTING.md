@@ -1,5 +1,18 @@
 # Testing (Plain Language)
 
+## Selected Word Case (2026-10-16)
+
+Selection-to-formatting regressions exercise `That is a [good ]result.` replaced
+with `Better.` using no selected space, ordinary selected space, and selected
+non-breaking space. All produce `That is a better result.`. Tests cover sentence
+starts, end-of-field whitespace restoration, I/acronyms, unselected names,
+multiword selection refusal and strict boolean IPC round-trips. No selected text
+is included in helper responses or diagnostics; only two classification flags.
+
+Selection/helper/diagnostic suite: 126 passed in 5.94 seconds. Follow-up insertion,
+app and punctuation suite: 179 passed in 1.11 seconds (overlapping suites).
+Ruff lint/format pass for 76 files. No running-app restart or live editor input.
+
 ## Insertion Scope and Decision Audit (2026-10-16)
 
 `tests/test_insertion_audit.py` adds 45 blank-paragraph combinations, sentence and

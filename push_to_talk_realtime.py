@@ -1487,7 +1487,14 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
                 context_metadata = {}
             context_metadata = {
                 key: context_metadata[key]
-                for key in ("context_status", "control_type", "selection_active", "editor_empty")
+                for key in (
+                    "context_status",
+                    "control_type",
+                    "selection_active",
+                    "editor_empty",
+                    "selected_lowercase_word",
+                    "selected_trailing_space",
+                )
                 if key in context_metadata
             }
             context_metadata.setdefault("context_status", "ok" if context else "unavailable")

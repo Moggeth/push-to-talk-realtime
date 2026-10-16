@@ -83,6 +83,8 @@ NUMBERS = {
     "recovery_count",
 }
 BOOLEANS = {
+    "selected_lowercase_word",
+    "selected_trailing_space",
     "terminal_enabled",
     "selection_active",
     "editor_empty",
@@ -122,6 +124,7 @@ TOKENS = {
         "empty_paragraph",
         "boundary",
         "continuation",
+        "word_replacement",
     },
     "insertion_mode": {"auto", "standalone", "insert"},
     "insertion_style": {"standalone", "insert"},

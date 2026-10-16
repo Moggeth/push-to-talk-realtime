@@ -115,7 +115,12 @@ def scoped_backend(monkeypatch):
 def test_blank_editor_cannot_read_enclosing_page_text(scoped_backend):
     backend, document, target, _ = scoped_backend
     result = backend.caret_context(asdict(target))
-    assert result == {"before": "", "after": ""}
+    assert result == {
+        "before": "",
+        "after": "",
+        "selected_lowercase_word": False,
+        "selected_trailing_space": False,
+    }
     assert backend.context_diagnostics["editor_empty"]
     assert document.selection.start == document.start
 
@@ -171,6 +176,60 @@ def test_readonly_value_control_is_rejected(scoped_backend):
     )
     assert backend.caret_context(asdict(target)) is None
     assert backend.context_diagnostics["context_status"] == "not_editable"
+
+
+@pytest.mark.parametrize("selected", ["good", "good ", "good\u00a0"])
+def test_double_click_word_replacement_end_to_end(scoped_backend, selected):
+    backend, document, target, _ = scoped_backend
+    from tests.test_rewrite_review import Range
+
+    prefix, suffix = "That is a ", "result."
+    # Without selected whitespace, leave the separator outside the selection.
+    if not selected[-1].isspace():
+        suffix = " " + suffix
+    document.text = prefix + selected + suffix
+    document.start, document.end = 0, len(document.text)
+    document.selection = Range(document, len(prefix), len(prefix) + len(selected))
+    data = backend.caret_context(asdict(target))
+    context = CaretContext(**data)
+    assert context.selected_lowercase_word
+    assert context.selected_trailing_space == selected[-1].isspace()
+    plan = choose_plan("auto", context)
+    inserted = format_insertion("Better.", plan, "Better. ")
+    assert prefix + inserted + suffix == "That is a better result."
+    assert plan.reason == "word_replacement"
+
+
+@pytest.mark.parametrize(
+    "replacement,expected", [("Better.", "better"), ("GPT.", "GPT"), ("I.", "I")]
+)
+def test_selected_lowercase_case_inheritance(replacement, expected):
+    context = CaretContext("Use ", " now", selected_lowercase_word=True)
+    result = format_insertion(replacement, choose_plan("auto", context), replacement + " ")
+    assert result == expected
+
+
+def test_selected_word_at_sentence_start_keeps_capitalization():
+    context = CaretContext("", "result.", True, True)
+    assert format_insertion("Better.", choose_plan("auto", context), "Better. ") == "Better. "
+    context = CaretContext("We need ", "", True, True)
+    assert format_insertion("Better.", choose_plan("auto", context), "Better. ") == "better. "
+
+
+def test_unselected_unknown_word_keeps_conservative_case():
+    context = CaretContext("Use ", " now")
+    assert format_insertion("Python.", choose_plan("auto", context), "Python. ") == "Python"
+
+
+def test_multiword_selection_does_not_supply_single_word_case(scoped_backend):
+    backend, document, target, _ = scoped_backend
+    from tests.test_rewrite_review import Range
+
+    document.text = "Use two words now."
+    document.start, document.end = 0, len(document.text)
+    document.selection = Range(document, 4, 14)
+    data = backend.caret_context(asdict(target))
+    assert not data["selected_lowercase_word"]
 
 
 def test_insertion_metadata_is_durable_without_text(tmp_path):

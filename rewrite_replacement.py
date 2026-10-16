@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+import re
 import time
 
 from output_transaction import output_transaction
@@ -122,6 +123,16 @@ class WindowsTextReplacement:
             if after.CompareEndpoints(1, document, 1) > 0:
                 after.MoveEndpointByRange(1, document, 1)
             before_text, after_text = canonical(before.GetText(256)), canonical(after.GetText(256))
+            selected = canonical(selection.GetText(257))
+            word = selected.strip()
+            selected_lowercase_word = bool(
+                len(selected) <= 256
+                and word.islower()
+                and re.fullmatch(r"[^\W\d_]+(?:['\u2019-][^\W\d_]+)*", word)
+            )
+            selected_trailing_space = bool(
+                selected and len(selected) <= 256 and selected[-1].isspace()
+            )
             current_target, current_id, _, current_selection = self._focused()
             if (
                 current_target != target
@@ -135,10 +146,14 @@ class WindowsTextReplacement:
                 context_status="ok",
                 selection_active=selection.CompareEndpoints(0, selection, 1) != 0,
                 editor_empty=not document.GetText(1),
+                selected_lowercase_word=selected_lowercase_word,
+                selected_trailing_space=selected_trailing_space,
             )
             return {
                 "before": before_text,
                 "after": after_text,
+                "selected_lowercase_word": selected_lowercase_word,
+                "selected_trailing_space": selected_trailing_space,
             }
         except Exception:
             self.context_diagnostics["context_status"] = "provider_error"
