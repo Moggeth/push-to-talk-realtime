@@ -136,6 +136,32 @@ def test_unscoped_document_pattern_falls_back(scoped_backend, monkeypatch):
     assert backend.context_diagnostics["context_status"] == "unscoped"
 
 
+def test_internal_editor_text_node_is_valid_scope(scoped_backend, monkeypatch):
+    backend, _, target, element = scoped_backend
+    from tests.test_rewrite_review import Range
+
+    text_node = SimpleNamespace(GetRuntimeId=lambda: (77,))
+    monkeypatch.setattr(Range, "GetEnclosingElement", lambda _: text_node)
+    backend.automation.RawViewWalker = SimpleNamespace(GetParentElement=lambda _: element)
+    assert backend.caret_context(asdict(target)) is not None
+    assert backend.context_diagnostics["context_scope"] == "descendant"
+
+
+def test_page_pattern_is_narrowed_to_editable_child(scoped_backend, monkeypatch):
+    backend, document, target, _ = scoped_backend
+    from tests.test_rewrite_review import Range
+
+    page = SimpleNamespace(GetRuntimeId=lambda: (88,))
+    monkeypatch.setattr(Range, "GetEnclosingElement", lambda _: page)
+    pattern = SimpleNamespace(
+        DocumentRange=Range(document), RangeFromChild=lambda child: document.DocumentRange
+    )
+    backend._focused = lambda: (target, (9,), pattern, document.selection.Clone())
+    result = backend.caret_context(asdict(target))
+    assert result["before"] == result["after"] == ""
+    assert backend.context_diagnostics["context_scope"] == "child_range"
+
+
 def test_selection_changed_during_read_is_rejected(scoped_backend):
     backend, document, target, _ = scoped_backend
     from tests.test_rewrite_review import Range
@@ -207,6 +233,29 @@ def test_selected_lowercase_case_inheritance(replacement, expected):
     context = CaretContext("Use ", " now", selected_lowercase_word=True)
     result = format_insertion(replacement, choose_plan("auto", context), replacement + " ")
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    "replacement,expected",
+    [
+        ("Better wording.", "better wording"),
+        ("Different text goes here.", "different text goes here"),
+        ("GPT works well.", "GPT works well"),
+        ("I agree.", "I agree"),
+    ],
+)
+def test_phrase_replaces_lowercase_word_without_sentence_formatting(replacement, expected):
+    context = CaretContext("Some ", "follows.", True, True)
+    result = format_insertion(replacement, choose_plan("auto", context), replacement + " ")
+    assert result == expected + " "
+
+
+def test_sentence_initial_phrase_replacement_stays_capitalized():
+    context = CaretContext("", "follows.", True, True)
+    assert (
+        format_insertion("Different wording.", choose_plan("auto", context), "Different wording. ")
+        == "Different wording. "
+    )
 
 
 def test_selected_word_at_sentence_start_keeps_capitalization():

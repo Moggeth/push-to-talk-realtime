@@ -1489,6 +1489,7 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
                 key: context_metadata[key]
                 for key in (
                     "context_status",
+                    "context_scope",
                     "control_type",
                     "selection_active",
                     "editor_empty",

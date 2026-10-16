@@ -1,5 +1,21 @@
 # Testing (Plain Language)
 
+## Editor Scope Compatibility and Phrase Replacement (2026-10-16)
+
+Runtime decision events confirmed context_status=unscoped and fallback to
+standalone during the user's failing tests. New synthetic regressions accept an
+internal editor text node through a bounded parent walk and narrow inherited
+page patterns through RangeFromChild, while the existing unscoped-page rejection
+and empty-editor clamping tests continue to pass. Phrase replacement tests cover
+unknown opening words, retained I/acronyms, restored separators, mid-sentence
+terminal punctuation removal and sentence-initial capitalization.
+
+265 insertion/app/helper/shutdown tests passed in 1.53 seconds. Ruff lint and
+format pass for 76 files. A metadata-only native scope probe was unavailable
+because the then-focused element did not supply a usable text selection; actual
+editor acceptance of the repaired scope paths still needs user testing after
+tray Restart. The probe did not read text, names or clipboard contents.
+
 ## Selected Word Case (2026-10-16)
 
 Selection-to-formatting regressions exercise `That is a [good ]result.` replaced

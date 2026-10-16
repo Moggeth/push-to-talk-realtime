@@ -101,11 +101,31 @@ class WindowsTextReplacement:
             if not editable:
                 self.context_diagnostics["context_status"] = "not_editable"
                 return None
-            # Some providers expose a page-wide pattern for an editable child.
-            # Never infer the child's context from the surrounding page.
-            if tuple(document.GetEnclosingElement().GetRuntimeId()) != runtime_id:
-                self.context_diagnostics["context_status"] = "unscoped"
-                return None
+            # Chromium may enclose the text range in an internal text node or
+            # expose a page-wide pattern. Establish containment, not identity.
+            enclosing = document.GetEnclosingElement()
+            scope = "direct"
+            if tuple(enclosing.GetRuntimeId()) != runtime_id:
+                scope = "unavailable"
+                try:
+                    document = pattern.RangeFromChild(element).Clone()
+                    scope = "child_range"
+                except Exception:
+                    try:
+                        node = enclosing
+                        for _ in range(16):
+                            node = self.automation.RawViewWalker.GetParentElement(node)
+                            if not node:
+                                break
+                            if tuple(node.GetRuntimeId()) == runtime_id:
+                                scope = "descendant"
+                                break
+                    except Exception:
+                        pass
+                if scope == "unavailable":
+                    self.context_diagnostics.update(context_status="unscoped", context_scope=scope)
+                    return None
+            self.context_diagnostics["context_scope"] = scope
             if (
                 selection.CompareEndpoints(0, document, 0) < 0
                 or selection.CompareEndpoints(1, document, 1) > 0

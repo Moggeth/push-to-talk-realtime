@@ -255,19 +255,19 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
             if not abbreviation and (word == "I." or not re.fullmatch(r"(?:[A-Za-z]\.)+", word)):
                 cleaned = cleaned[:-1]
         match = re.match(r"([A-Za-z]+)(.*)", cleaned, re.DOTALL)
-        replacement_word = cleaned.rstrip(".!?")
+        replacement_start = re.match(r"([^\W\d_]+(?:['\u2019-][^\W\d_]+)*)(.*)", cleaned, re.DOTALL)
         if match and match[1].istitle() and match[1].lower() in COMMON_OPENERS:
             cleaned = match[1].lower() + match[2]
         elif (
             plan.context is not None
             and plan.context.selected_lowercase_word
-            and replacement_word != "I"
-            and replacement_word.istitle()
-            and re.fullmatch(r"[^\W\d_]+(?:['\u2019-][^\W\d_]+)*", replacement_word)
+            and replacement_start is not None
+            and replacement_start[1] != "I"
+            and replacement_start[1].istitle()
         ):
             # Replacing an explicitly lowercase word supplies a stronger case
             # signal than a provider's default sentence-initial capitalization.
-            cleaned = replacement_word.lower() + cleaned[len(replacement_word) :]
+            cleaned = replacement_start[1].lower() + replacement_start[2]
     context = plan.context
     if context is None:
         return cleaned if plan.style == "insert" else standalone

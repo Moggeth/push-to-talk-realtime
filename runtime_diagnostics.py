@@ -115,6 +115,7 @@ BOOLEANS = {
     "python_present",
 }
 TOKENS = {
+    "context_scope": {"direct", "child_range", "descendant", "unavailable"},
     "input_initial": {"empty", "upper", "lower", "other"},
     "output_initial": {"empty", "upper", "lower", "other"},
     "insertion_reason": {
