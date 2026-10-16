@@ -28,6 +28,13 @@ from rewrite_review import RewriteReviewManager
         ("", "", "Hello.", "Hello. "),
         ("Finished. ", "", "Hello.", "Hello. "),
         ("Finished.\n  ", "", "Hello.", "Hello. "),
+        ("\u200b", "", "Hello.", "Hello. "),
+        ("\ufeff\u2060", "\u200b", "Hello.", "Hello. "),
+        ("\ufffc", "\ufffc", "Hello.", "Hello. "),
+        (" \u200b\n\ufeff", "\u200b", "Hello.", "Hello. "),
+        ("I think ", "", "That works.", "that works."),
+        ("I think ", " \u200b", "That works!", "that works!"),
+        ("I wonder ", "\ufeff", "Why?", "why?"),
         ("", ".", "Hello.", "Hello"),
         ("", " rest", "Hello.", "Hello."),
     ],
@@ -52,6 +59,12 @@ def test_modes_fallback_bullets_and_blank():
     assert (
         format_insertion("The thought.", choose_plan("standalone", None), "The thought. ")
         == "The thought. "
+    )
+    assert (
+        format_insertion(
+            "The thought.", choose_plan("insert", CaretContext("a ", "")), "The thought. "
+        )
+        == "the thought"
     )
 
 

@@ -7,6 +7,14 @@ from dataclasses import dataclass
 
 INSERTION_MODES = ("auto", "standalone", "insert")
 
+# Empty rich-text paragraphs may contain caret anchors or object placeholders.
+_EDITOR_ANCHORS = str.maketrans("", "", "\u200b\u2060\ufeff\ufffc")
+
+
+def visible_context(text: str) -> str:
+    return text.translate(_EDITOR_ANCHORS)
+
+
 # Only unambiguous common opening words are lowered. Unknown words may be names.
 COMMON_OPENERS = frozenset(
     [
@@ -155,6 +163,7 @@ class InsertionPlan:
     style: str
     label: str
     context: CaretContext | None = None
+    trim_terminal: bool = True
 
 
 def choose_plan(mode: str, context: CaretContext | None, *, bullet=False) -> InsertionPlan:
@@ -167,12 +176,13 @@ def choose_plan(mode: str, context: CaretContext | None, *, bullet=False) -> Ins
     if context is None:
         return InsertionPlan("standalone", "Auto: unavailable")
     # A newline is a paragraph boundary even after trailing indentation.
-    line = context.before.rsplit("\n", 1)[-1].rstrip()
+    line = visible_context(context.before).rsplit("\n", 1)[-1].rstrip()
     start = not line or bool(re.search(r"[.!?][\"\u201d\u2019)\]]*$", line))
     return InsertionPlan(
         "standalone" if start else "insert",
         "Auto: standalone" if start else "Auto: insert",
         context,
+        trim_terminal=bool(visible_context(context.after).strip()),
     )
 
 
@@ -183,11 +193,13 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
         cleaned = standalone.rstrip()
     else:
         cleaned = text.strip()
+        continuation = plan.trim_terminal
         # Remove a provider's sentence-ending punctuation, preserving ellipses,
         # decimals, initials, and abbreviations that have meaningful final dots.
-        if cleaned.endswith(("!", "?")):
+        # At the end of existing text, keep punctuation to finish the sentence.
+        if continuation and cleaned.endswith(("!", "?")):
             cleaned = cleaned.rstrip("!?")
-        elif cleaned.endswith(".") and not cleaned.endswith(".."):
+        elif continuation and cleaned.endswith(".") and not cleaned.endswith(".."):
             word = cleaned.split()[-1]
             abbreviation = word.lower() in {"etc.", "e.g.", "i.e.", "mr.", "mrs.", "dr.", "vs."}
             if not abbreviation and not re.fullmatch(r"(?:[A-Za-z]\.)+", word):
@@ -198,7 +210,7 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
     context = plan.context
     if context is None:
         return cleaned if plan.style == "insert" else standalone
-    before, after = context.before, context.after
+    before, after = visible_context(context.before), visible_context(context.after)
     # Avoid duplicate punctuation at a splice, including standalone inserts.
     if after[:1] in (".", "!", "?", ",", ";", ":") and cleaned.endswith(tuple(".!?,;:")):
         cleaned = cleaned.rstrip(".!?,;:")

@@ -1,5 +1,19 @@
 # Testing (Plain Language)
 
+## Auto Terminal Punctuation (2026-10-16)
+
+Regression cases reproduce visually empty UIA context containing zero-width
+spaces, word joiners, BOM markers and object replacement characters. These must
+choose standalone formatting and retain the final full stop. Auto continuation
+at the end of text preserves full stops, question marks and exclamation marks,
+including when only whitespace/anchors follow. Real mid-sentence splices and
+explicit Insert fragment formatting retain their existing behavior.
+
+179 insertion/text-processing/app tests passed in 1.24 seconds (command 1.837 s).
+No desktop automation, live editor reads, clipboard writes or app restart.
+The code reproductions establish the failure modes; the user's actual editor
+context was not captured, so its precise trigger is not confirmed.
+
 ## Local Insertion (2026-10-15)
 
 `tests/test_insertion_formatting.py` covers the reported mid-sentence example,
