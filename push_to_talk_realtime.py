@@ -1345,11 +1345,13 @@ def get_selected_text_tidy_job() -> SelectedTextTidyJob:
                 paste=send_paste_shortcut,
                 transform=transform_selected_text_tidy,
                 archive_raw=archive_selected_text_tidy_raw,
-                archive_final=lambda entry_id,
-                final,
-                status,
-                error: transcript_store.finalize_entry(
-                    entry_id, final_text=final, post_process_status=status, post_process_error=error
+                archive_final=lambda entry_id, final, status, error: (
+                    transcript_store.finalize_entry(
+                        entry_id,
+                        final_text=final,
+                        post_process_status=status,
+                        post_process_error=error,
+                    )
                 ),
                 feedback_started=mark_post_processing_started,
                 feedback_finished=mark_post_processing_finished,
@@ -4784,11 +4786,13 @@ def build_menu() -> pystray.Menu:
             "Bullet mode", toggle_bullet_mode, checked=lambda _item: state.bullet_mode
         ),
         pystray.MenuItem(
-            lambda _item: "Mode: "
-            + (
-                state.recording_rewrite_mode.title()
-                if state.is_listening or state.session_start_pending
-                else "Raw"
+            lambda _item: (
+                "Mode: "
+                + (
+                    state.recording_rewrite_mode.title()
+                    if state.is_listening or state.session_start_pending
+                    else "Raw"
+                )
             ),
             build_recording_mode_menu(),
         ),

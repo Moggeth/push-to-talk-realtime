@@ -1,5 +1,32 @@
 # Testing (Plain Language)
 
+## Cross-platform CI and timing persistence (2026-10-16)
+
+- Linux CI installs `libportaudio2` before collecting application tests. The pip
+  `sounddevice` package does not bundle the native PortAudio runtime on Linux.
+- Timing tests freeze the clock to reproduce Windows observations sharing a
+  timestamp. Reload and restart must preserve their multiplicity without doubling
+  existing history, including observations arriving while disk history loads.
+- The full-queue shutdown regression verifies all 512 rows persist and exactly
+  two transactions commit (initial cleanup and one bounded write batch). It keeps
+  the existing shutdown deadline; it does not mask slow per-row commits.
+- Run `ruff format --check .`, `ruff check .`, and the workflow pytest coverage
+  command. Formatting is compatible with Ruff 0.17.1 used by the failing CI run.
+- Test configuration clears inherited OpenAI credentials, disables dotenv loading,
+  and replaces the SDK constructor and realtime connection factory with fail-fast
+  sentinels. Provider tests explicitly inject fake clients/sockets. Isolation
+  regressions exercise both the application SDK path and live engine entry point
+  and assert failure before a real transport is constructed. Subprocesses inherit
+  the empty key and loopback-only provider URLs. Unhandled thread exceptions are
+  errors; a subprocess regression proves an unmocked SDK call on a background
+  thread fails the test run instead of becoming a non-fatal warning.
+- Local Linux/Python 3.12 verification: 609 passed, 9 platform skips, 76.10%
+  coverage (70% gate unchanged), Ruff lint/format passed for 98 files. Native
+  Windows/macOS execution remains for the CI matrix. One existing Pillow
+  `getdata` deprecation warning remains.
+- These tests use synthetic temporary databases and dummy input/tray backends;
+  they do not start dictation, make paid API requests, or touch real history.
+
 ## Four Exact Insertion Regressions (2026-10-16)
 
 Five exact-example tests (including straight/curly apostrophes) were run before

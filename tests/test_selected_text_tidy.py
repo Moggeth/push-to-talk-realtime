@@ -41,9 +41,9 @@ class FakeDesktop:
             copy_selection=self.copy,
             paste=lambda: setattr(self, "pasted", True),
             transform=lambda _: self.result,
-            archive_raw=lambda raw: (self.archives.append([raw, None, None, None]) or 7)
-            if self.archive_ok
-            else None,
+            archive_raw=lambda raw: (
+                (self.archives.append([raw, None, None, None]) or 7) if self.archive_ok else None
+            ),
             archive_final=lambda _, final, status, error: self.archives[-1].__setitem__(
                 slice(1, 4), [final, status, error]
             ),
@@ -85,7 +85,7 @@ def test_copy_timeout_does_not_paste(monkeypatch):
 def test_focus_or_user_activity_change_keeps_result_for_clipboard_and_history():
     desktop = FakeDesktop()
     dependencies = desktop.dependencies()
-    dependencies.transform = lambda _: (setattr(desktop, "input", 11) or "rewritten")
+    dependencies.transform = lambda _: setattr(desktop, "input", 11) or "rewritten"
     tidy.SelectedTextTidyJob(dependencies)._run(desktop.focus)
     assert not desktop.pasted
     assert desktop.archives[-1][2] == "recovery"
@@ -95,7 +95,7 @@ def test_focus_or_user_activity_change_keeps_result_for_clipboard_and_history():
 def test_independent_clipboard_change_is_not_overwritten():
     desktop = FakeDesktop()
     dependencies = desktop.dependencies()
-    dependencies.transform = lambda _: (desktop.write("other") or "rewritten")
+    dependencies.transform = lambda _: desktop.write("other") or "rewritten"
     tidy.SelectedTextTidyJob(dependencies)._run(desktop.focus)
     assert not desktop.pasted
     assert desktop.clipboard == "other"
@@ -216,7 +216,7 @@ def test_selected_tidy_request_uses_terra_with_android_tidy_prompt(monkeypatch):
 def test_focus_changes_while_releasing_shortcut_never_copies_or_calls_api():
     desktop = FakeDesktop()
     dependencies = desktop.dependencies()
-    dependencies.wait_for_release = lambda: (setattr(desktop, "focus", "other") or True)
+    dependencies.wait_for_release = lambda: setattr(desktop, "focus", "other") or True
     dependencies.copy_selection = lambda: pytest.fail("Must not copy from a different field")
     dependencies.transform = lambda _: pytest.fail("Must not send a different selection")
     tidy.SelectedTextTidyJob(dependencies)._run("target")

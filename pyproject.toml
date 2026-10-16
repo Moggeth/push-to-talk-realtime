@@ -12,6 +12,7 @@ quote-style = "double"
 [tool.pytest.ini_options]
 addopts = "-vv"
 testpaths = ["tests"]
+filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
 pythonpath = ["."]
 
 [tool.coverage.run]

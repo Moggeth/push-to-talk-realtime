@@ -21,6 +21,9 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
+      - name: Install Linux audio runtime
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -58,6 +61,9 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
+      - name: Install Linux audio runtime
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
