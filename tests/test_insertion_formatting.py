@@ -177,6 +177,10 @@ def test_paste_uses_local_context_and_visual_feedback(monkeypatch, target):
     assert decision.kwargs["lowered_initial"]
     assert decision.kwargs["removed_terminal"]
     assert decision.kwargs["context_status"] == "ok"
+    assert decision.kwargs["context_diagnostics_version"] == 2
+    assert decision.kwargs["before_raw_category"] == "Zs"
+    assert decision.kwargs["before_marker_codepoint"] == 32
+    assert decision.kwargs["before_has_word"]
     assert diagnostics.emit.call_args_list[-1].kwargs["insertion_outcome"] == "direct"
     assert app.cursor_indicator_snapshot().label == "Auto: insert"
     app.state.insertion_feedback_at -= 3

@@ -167,6 +167,8 @@ class WindowsTextReplacement:
                 return None
             self.context_diagnostics.update(
                 context_status="ok",
+                caret_at_editor_start=selection.CompareEndpoints(0, document, 0) == 0,
+                caret_at_editor_end=selection.CompareEndpoints(1, document, 1) == 0,
                 selection_active=selection.CompareEndpoints(0, selection, 1) != 0,
                 editor_empty=not document.GetText(1),
                 selected_lowercase_word=selected_lowercase_word,

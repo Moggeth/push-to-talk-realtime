@@ -1,5 +1,22 @@
 # Testing (Plain Language)
 
+## Blank-Field Context Diagnostics (2026-10-20)
+
+`tests/test_context_diagnostics.py` checks NUL, zero-width space, joiners, BOM and
+object-placeholder boundaries; distinguishes removed from retained markers; and
+verifies durable shape events contain no surrounding content. The serializer
+independently rejects visible character codepoints, invalid numbers and booleans.
+Existing insertion/helper tests cover scope and propagation through the output
+pipeline. Tests use synthetic ranges and never inject desktop input.
+
+For a real recurrence, note the approximate time, application, visibly blank vs
+selected-word state, and whether the caret moved during dictation. Match the
+`insertion_decision` and `insertion_output` by run ID and insertion ID. Version 2
+adds raw boundary category and invisible marker codepoint, normalized and current
+paragraph lengths, word-presence flags, and caret-at-editor-edge flags. These
+distinguish provider markers from scoped text without collecting text itself.
+Source hashes identify the loaded instrumentation. Tray Restart is required.
+
 ## Consecutive Sentence Spacing (2026-10-16)
 
 Runtime events showed a first insertion with before_length=0, after_boundary=newline

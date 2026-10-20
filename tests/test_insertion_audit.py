@@ -123,6 +123,8 @@ def test_blank_editor_cannot_read_enclosing_page_text(scoped_backend):
         "selected_leading_space": False,
     }
     assert backend.context_diagnostics["editor_empty"]
+    assert backend.context_diagnostics["caret_at_editor_start"]
+    assert backend.context_diagnostics["caret_at_editor_end"]
     assert document.selection.start == document.start
 
 

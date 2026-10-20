@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import traceback
+import unicodedata
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -57,6 +58,11 @@ EVENTS = {
     "task_failed",
 }
 NUMBERS = {
+    "context_diagnostics_version",
+    "before_visible_length",
+    "after_visible_length",
+    "before_paragraph_length",
+    "after_paragraph_length",
     "insertion_id",
     "context_ms",
     "before_length",
@@ -83,6 +89,10 @@ NUMBERS = {
     "recovery_count",
 }
 BOOLEANS = {
+    "caret_at_editor_start",
+    "caret_at_editor_end",
+    "before_has_word",
+    "after_has_word",
     "selected_lowercase_word",
     "selected_trailing_space",
     "selected_leading_space",
@@ -207,6 +217,65 @@ TOKENS = {
     "readiness": {"reported_ready", "listener_down", "busy", "starting", "unknown", "stale"},
     "progress_source": {"tray_worker", "process_monitor"},
 }
+for _side in ("before", "after"):
+    TOKENS[f"{_side}_raw_category"] = {
+        "empty",
+        "Lu",
+        "Ll",
+        "Lt",
+        "Lm",
+        "Lo",
+        "Mn",
+        "Mc",
+        "Me",
+        "Nd",
+        "Nl",
+        "No",
+        "Pc",
+        "Pd",
+        "Ps",
+        "Pe",
+        "Pi",
+        "Pf",
+        "Po",
+        "Sm",
+        "Sc",
+        "Sk",
+        "So",
+        "Zs",
+        "Zl",
+        "Zp",
+        "Cc",
+        "Cf",
+        "Cs",
+        "Co",
+        "Cn",
+    }
+
+
+def context_shape(before: str, after: str) -> dict:
+    """Describe shape only; codepoints are limited to invisible/control markers."""
+    from insertion_formatting import visible_context
+
+    result = {"context_diagnostics_version": 2}
+    for side, raw in (("before", before), ("after", after)):
+        visible = visible_context(raw)
+        char = raw[-1:] if side == "before" else raw[:1]
+        category = unicodedata.category(char) if char else "empty"
+        paragraph = visible.rsplit("\n", 1)[-1] if side == "before" else visible.split("\n", 1)[0]
+        result.update(
+            {
+                f"{side}_visible_length": len(visible),
+                f"{side}_paragraph_length": len(paragraph),
+                f"{side}_has_word": any(c.isalnum() for c in paragraph),
+                f"{side}_raw_category": category,
+            }
+        )
+        if char and (category in {"Cc", "Cf", "Zs", "Zl", "Zp"} or char == "\ufffc"):
+            result[f"{side}_marker_codepoint"] = ord(char)
+    return result
+
+
 LEGACY_CATEGORIES = {
     "Audio",
     "Startup",
@@ -265,7 +334,17 @@ def safe_exception(exc: BaseException) -> dict:
 def safe_fields(fields: dict) -> dict:
     output = {}
     for name, value in fields.items():
-        if (name in NUMBERS and type(value) in (int, float)) or (
+        if name in {"before_marker_codepoint", "after_marker_codepoint"}:
+            if (
+                type(value) is int
+                and 0 <= value <= 0x10FFFF
+                and (
+                    unicodedata.category(chr(value)) in {"Cc", "Cf", "Zs", "Zl", "Zp"}
+                    or value == 0xFFFC
+                )
+            ):
+                output[name] = value
+        elif (name in NUMBERS and type(value) in (int, float)) or (
             name in BOOLEANS and type(value) is bool
         ):
             output[name] = value

@@ -1,6 +1,17 @@
 Push-to-talk Transcription
 ==========================
 
+Insertion diagnostics now include version-2 context shape: raw boundary Unicode
+categories, invisible/control marker codepoints, normalized and paragraph lengths,
+word-presence flags, and whether the selection touches the focused editor's start
+or end. These accompany the existing scope, decision and output events in
+`%LOCALAPPDATA%\PushToTalkRealtime\diagnostics\app.events.jsonl` (rotated).
+Visible character codepoints, surrounding text, field names and clipboard contents
+are not logged. After tray **Restart**, reproduce an issue and note the approximate
+time and whether the field was blank or had a selection; those observations let
+us compare the visible state with the accessibility provider's reported state.
+This instrumentation does not change insertion behavior or automatically fix it.
+
 Hold a hotkey to record from your microphone, transcribe audio, and paste
 the transcript into the active window. A second hotkey logs dictations as
 timestamped work entries. The app runs from a compact system tray menu with a

@@ -1494,6 +1494,8 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
                     "control_type",
                     "selection_active",
                     "editor_empty",
+                    "caret_at_editor_start",
+                    "caret_at_editor_end",
                     "selected_lowercase_word",
                     "selected_trailing_space",
                     "selected_leading_space",
@@ -1510,9 +1512,12 @@ def _paste_text_unlocked(text: str, target: PasteTarget | None = None, *, bullet
     standalone = prepared
     if not bullet_mode:
         prepared = format_insertion(text, plan, prepared)
+    from runtime_diagnostics import context_shape
+
     APP_DIAGNOSTICS.emit(
         "insertion_decision",
         **context_metadata,
+        **(context_shape(context.before, context.after) if context else {}),
         insertion_id=insertion_id,
         insertion_mode=insertion_mode,
         suffix_mode=suffix_mode,
