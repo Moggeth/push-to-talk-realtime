@@ -20,13 +20,24 @@ _EDITOR_ANCHORS = str.maketrans(
 
 
 def visible_context(text: str) -> str:
-    return (
+    normalized = (
         text.translate(_EDITOR_ANCHORS)
         .replace("\r\n", "\n")
         .replace("\r", "\n")
         .replace("\u2028", "\n")
         .replace("\u2029", "\n")
     )
+    # Some providers expose an empty paragraph as a single control or joiner.
+    # Preserve joiners (and indentation) in real prose.
+    markers = "\x00\u200c\u200d\u00ad"
+    if any(marker in normalized for marker in markers):
+        normalized = "\n".join(
+            "".join(c for c in line if c not in markers)
+            if all(c.isspace() or c in markers for c in line)
+            else line
+            for line in normalized.split("\n")
+        )
+    return normalized
 
 
 def boundary_kind(text: str, *, before: bool) -> str:
@@ -250,8 +261,10 @@ def choose_plan(mode: str, context: CaretContext | None, *, bullet=False) -> Ins
         return InsertionPlan("standalone", "Auto: unavailable", reason="no_context", automatic=True)
     # A newline is a paragraph boundary even after trailing indentation.
     line = visible_context(context.before).rsplit("\n", 1)[-1].rstrip()
-    start = not line or bool(re.search(r"[.!?][\"\u201d\u2019)\]]*$", line))
-    start = start or bool(re.fullmatch(r"[\s(\[{\"\u201c\u2018]*|(?:[-*\u2022]|\d+[.)])\s*", line))
+    start = not line or bool(re.search(r"[.!?][\"'\u201d\u2019)\]}]*$", line))
+    start = start or bool(
+        re.fullmatch(r"[\s(\[{\"\u201c\u2018]*|(?:[-*\u2022]|\d+[.)])\s*", line.lstrip())
+    )
     if last_word(line).lower() in CONTINUING_ABBREVIATIONS:
         start = False
     return InsertionPlan(
@@ -277,6 +290,10 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
         cleaned = standalone.rstrip()
     else:
         cleaned = text.strip()
+        opening = closing = ""
+        quotes = {'"': '"', "'": "'", "\u201c": "\u201d", "\u2018": "\u2019"}
+        if len(cleaned) > 2 and quotes.get(cleaned[0]) == cleaned[-1]:
+            opening, cleaned, closing = cleaned[0], cleaned[1:-1], cleaned[-1]
         continuation = plan.trim_terminal
         # Remove a provider's sentence-ending punctuation, preserving ellipses,
         # decimals, initials, and abbreviations that have meaningful final dots.
@@ -298,6 +315,7 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
             # Replacing an explicitly lowercase word supplies a stronger case
             # signal than a provider's default sentence-initial capitalization.
             cleaned = replacement_start[1].lower() + replacement_start[2]
+        cleaned = opening + cleaned + closing
     context = plan.context
     if context is None:
         return cleaned if plan.style == "insert" else standalone
@@ -320,7 +338,10 @@ def format_insertion(text: str, plan: InsertionPlan, standalone: str) -> str:
             and before[-1] not in '([{"\u201c\u2018/\u2014-'
         )
         and cleaned
-        and cleaned[0] not in ',.;:!?)]}"\u201d\u2019'
+        and (
+            cleaned[0] not in ',.;:!?)]}"\u201d\u2019'
+            or (len(cleaned) > 2 and cleaned.startswith('"') and cleaned.endswith('"'))
+        )
     ):
         leading = " "
     if after:

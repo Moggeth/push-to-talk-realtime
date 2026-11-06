@@ -1,5 +1,10 @@
 # Testing (Plain Language)
 
+Context audit: `tests/test_insertion_boundaries.py` covers marker-only fields,
+joiners in words, indented lists, quoted replacements, protected abbreviations,
+and closing punctuation. Seven examples failed before the fixes. The examples
+are synthetic: they do not identify which character caused an earlier live failure.
+
 ## Blank-Field Context Diagnostics (2026-10-20)
 
 `tests/test_context_diagnostics.py` checks NUL, zero-width space, joiners, BOM and

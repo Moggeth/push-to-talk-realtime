@@ -16,7 +16,8 @@ def test_invisible_boundary_identified_without_text(marker):
 
 def test_removed_marker_and_retained_marker_are_distinguishable():
     assert context_shape("\u200b", "")["before_visible_length"] == 0
-    assert context_shape("\u200d", "")["before_visible_length"] == 1
+    assert context_shape("\u200d", "")["before_visible_length"] == 0
+    assert context_shape("a\u200db", "")["before_visible_length"] == 3
 
 
 @pytest.mark.parametrize(

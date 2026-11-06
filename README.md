@@ -1,6 +1,10 @@
 Push-to-talk Transcription
 ==========================
 
+Auto insertion treats marker-only caret context as blank, but preserves joiners
+within words. It recognizes indented list starts and handles quoted mid-sentence
+replacements without discarding their quotes.
+
 Insertion diagnostics now include version-2 context shape: raw boundary Unicode
 categories, invisible/control marker codepoints, normalized and paragraph lengths,
 word-presence flags, and whether the selection touches the focused editor's start
